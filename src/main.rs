@@ -26,7 +26,6 @@ use log::{error, info, warn};
 use rand::RngCore;
 use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
 use reqwless::request::Method;
-use serde::Deserialize;
 use static_cell::StaticCell;
 
 bind_interrupts!(struct Irqs {
@@ -36,39 +35,6 @@ bind_interrupts!(struct Irqs {
 
 const WIFI_NETWORK: &str = env!("WF_SSID");
 const WIFI_PASSWORD: &str = env!("WF_PASS");
-
-// Logger task for USB communication
-#[embassy_executor::task]
-async fn logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
-}
-
-#[embassy_executor::task]
-async fn cyw43_task(
-    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-) -> ! {
-    runner.run().await
-}
-
-#[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
-    runner.run().await
-}
-
-#[panic_handler]
-fn handle_panic(info: &PanicInfo) -> ! {
-    error!("Panicking: {}", info);
-
-    // Busy-wait loop to introduce a delay
-    for _ in 0..10_000_000 {
-        // Prevent the compiler from optimizing out the loop
-        atomic::compiler_fence(Ordering::SeqCst);
-    }
-
-    loop {
-        // Optionally, add a delay here to allow the message to be sent
-    }
-}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -148,23 +114,26 @@ async fn main(spawner: Spawner) {
     }
 
     // Wait for DHCP, not necessary when using static IP
-    info!("waiting for DHCP...");
+    info!("Obtaining an IP address...");
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
     }
-    info!("DHCP is now up!");
+    if let Some(ip) = stack.config_v4() {
+        info!("IP address (v4): {}", ip.address);
+    }
+    if let Some(ip) = stack.config_v6() {
+        info!("IP address (v6): {}", ip.address);
+    }
 
-    info!("waiting for link up...");
+    info!("Waiting for link up...");
     while !stack.is_link_up() {
         Timer::after_millis(500).await;
     }
-    info!("Link is up!");
+    info!("Link up!");
 
-    info!("waiting for stack to be up...");
+    info!("Waiting network stack...");
     stack.wait_config_up().await;
-    info!("Stack is up!");
-
-    // And now we can use it!
+    info!("Stack up!");
 
     loop {
         let mut rx_buffer = [0; 8192];
@@ -212,5 +181,38 @@ async fn main(spawner: Spawner) {
         info!("Response body: {:?}", &body);
 
         Timer::after(Duration::from_secs(5)).await;
+    }
+}
+
+/// Pipes log messages over USB serial back to whatever just flashed us.
+#[embassy_executor::task]
+async fn logger_task(driver: Driver<'static, USB>) {
+    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+}
+
+#[embassy_executor::task]
+async fn cyw43_task(
+    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
+) -> ! {
+    runner.run().await
+}
+
+#[embassy_executor::task]
+async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
+    runner.run().await
+}
+
+#[panic_handler]
+fn handle_panic(info: &PanicInfo) -> ! {
+    error!("Panicking: {}", info);
+
+    // Busy-wait loop to introduce a delay
+    for _ in 0..10_000_000 {
+        // Prevent the compiler from optimizing out the loop
+        atomic::compiler_fence(Ordering::SeqCst);
+    }
+
+    loop {
+        // Optionally, add a delay here to allow the message to be sent
     }
 }
