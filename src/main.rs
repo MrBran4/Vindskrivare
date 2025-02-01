@@ -114,15 +114,9 @@ async fn main(spawner: Spawner) {
     }
 
     // Wait for DHCP, not necessary when using static IP
-    info!("Obtaining an IP address...");
+    info!("Waiting for DHCP...");
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
-    }
-    if let Some(ip) = stack.config_v4() {
-        info!("IP address (v4): {}", ip.address);
-    }
-    if let Some(ip) = stack.config_v6() {
-        info!("IP address (v6): {}", ip.address);
     }
 
     info!("Waiting for link up...");
@@ -130,6 +124,13 @@ async fn main(spawner: Spawner) {
         Timer::after_millis(500).await;
     }
     info!("Link up!");
+
+    if let Some(ip) = stack.config_v4() {
+        info!("IP address (v4): {}", ip.address);
+    }
+    if let Some(ip) = stack.config_v6() {
+        info!("IP address (v6): {}", ip.address);
+    }
 
     info!("Waiting network stack...");
     stack.wait_config_up().await;
