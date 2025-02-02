@@ -6,35 +6,40 @@
 #![allow(async_fn_in_trait)]
 
 use core::panic::PanicInfo;
-use core::str::from_utf8;
 use core::sync::atomic::{self, Ordering};
 
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
+
 use embassy_executor::Spawner;
-use embassy_net::dns::DnsSocket;
-use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use embassy_time::{Duration, Timer};
+use log::{error, info, warn};
+use rand::RngCore;
+
 use embassy_net::{Config, StackResources};
 use embassy_rp::bind_interrupts;
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
+use embassy_rp::i2c::InterruptHandler as I2cInterruptHandler;
+use embassy_rp::peripherals::I2C1;
+use embassy_rp::peripherals::{DMA_CH0, I2C0, PIO0, USB};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
-use embassy_time::{Duration, Timer};
-use log::{error, info, warn};
-use rand::RngCore;
-use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
-use reqwless::request::Method;
+
 use static_cell::StaticCell;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
     USBCTRL_IRQ => UsbInterruptHandler<USB>;
+    I2C1_IRQ => I2cInterruptHandler<I2C1>;
+    I2C0_IRQ => I2cInterruptHandler<I2C0>;
 });
 
 const WIFI_NETWORK: &str = env!("WF_SSID");
 const WIFI_PASSWORD: &str = env!("WF_PASS");
+
+mod net;
+mod sen55;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -65,6 +70,21 @@ async fn main(spawner: Spawner) {
         p.DMA_CH0,
     );
 
+    info!("set up i2c ");
+    /*
+    Pico VBUS  ->  Sensor VDD (Pin 1) red
+    Pico GND   ->  Sensor GND (Pin 2) black
+    Pico GP4   ->  Sensor SDA (Pin 3) green
+    Pico GP5   ->  Sensor SCL (Pin 4) yellow
+    Pico GND   ->  Sensor SEL (Pin 5) blue
+               ->  Sensor NC  (Pin 6) purple (do not connect)
+    */
+    let sda = p.PIN_4; // Marked GP4 on the board
+    let scl = p.PIN_5; // Marked GP5 on the board
+    let i2c =
+        embassy_rp::i2c::I2c::new_blocking(p.I2C0, scl, sda, embassy_rp::i2c::Config::default());
+    info!("i2c configured");
+
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
     let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
@@ -78,12 +98,6 @@ async fn main(spawner: Spawner) {
         .await;
 
     let config = Config::dhcpv4(Default::default());
-    // Use static IP configuration instead of DHCP
-    //let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-    //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
-    //    dns_servers: Vec::new(),
-    //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
-    //});
 
     // Generate random seed
     let seed = rng.next_u64();
@@ -117,11 +131,13 @@ async fn main(spawner: Spawner) {
     info!("Waiting for DHCP...");
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
+        warn!("DHCP not up yet")
     }
 
     info!("Waiting for link up...");
     while !stack.is_link_up() {
         Timer::after_millis(500).await;
+        warn!("Link not up yet")
     }
     info!("Link up!");
 
@@ -136,50 +152,18 @@ async fn main(spawner: Spawner) {
     stack.wait_config_up().await;
     info!("Stack up!");
 
+    spawner
+        .spawn(net::worker(stack))
+        .expect("Couldn't spawn net task");
+
+    info!("Spawning sen55 task");
+    Timer::after_secs(5).await;
+    spawner
+        .spawn(sen55::worker(i2c))
+        .expect("Couldn't spawn sen55 task");
+
     loop {
-        let mut rx_buffer = [0; 8192];
-        let mut tls_read_buffer = [0; 16640];
-        let mut tls_write_buffer = [0; 16640];
-
-        let client_state = TcpClientState::<1, 1024, 1024>::new();
-        let tcp_client = TcpClient::new(stack, &client_state);
-        let dns_client = DnsSocket::new(stack);
-        let tls_config = TlsConfig::new(
-            seed,
-            &mut tls_read_buffer,
-            &mut tls_write_buffer,
-            TlsVerify::None,
-        );
-
-        let mut http_client = HttpClient::new_with_tls(&tcp_client, &dns_client, tls_config);
-        let url = "https://api.myip.com";
-
-        info!("connecting to {}", &url);
-
-        let mut request = match http_client.request(Method::GET, url).await {
-            Ok(req) => req,
-            Err(e) => {
-                error!("Failed to make HTTP request: {:?}", e);
-                return; // handle the error
-            }
-        };
-
-        let response = match request.send(&mut rx_buffer).await {
-            Ok(resp) => resp,
-            Err(_e) => {
-                error!("Failed to send HTTP request");
-                return; // handle the error;
-            }
-        };
-
-        let body = match from_utf8(response.body().read_to_end().await.unwrap()) {
-            Ok(b) => b,
-            Err(_e) => {
-                error!("Failed to read response body");
-                return; // handle the error
-            }
-        };
-        info!("Response body: {:?}", &body);
+        info!("Main loop");
 
         Timer::after(Duration::from_secs(5)).await;
     }
@@ -207,13 +191,5 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
 fn handle_panic(info: &PanicInfo) -> ! {
     error!("Panicking: {}", info);
 
-    // Busy-wait loop to introduce a delay
-    for _ in 0..10_000_000 {
-        // Prevent the compiler from optimizing out the loop
-        atomic::compiler_fence(Ordering::SeqCst);
-    }
-
-    loop {
-        // Optionally, add a delay here to allow the message to be sent
-    }
+    cortex_m::peripheral::SCB::sys_reset();
 }
