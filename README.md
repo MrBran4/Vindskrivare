@@ -16,4 +16,17 @@ The Vindstyrka is a pretty sound device and actually has a Sensirion SEN54 insid
 - Raspberry Pi Pico W
 - Sensirion SEN5x sensor (I used [SEN55](https://www.mouser.co.uk/ProductDetail/403-SEN55-SDN-T) but SEN54 should work too)
 - To connect the two, use [this cable](https://www.mouser.co.uk/ProductDetail/403-SEN5XJUMPERCABLE)
-- Optional 3D printed enclosure here
+- Optional 3D printed enclosure (link soon, doesn't fit in case lol)
+
+#### How do I build it?
+
+You'll need these environment variables set:
+
+- `WF_SSID` Your WiFi network name
+- `WF_PASS` Your WiFi password
+- `MQTT_CLIENT_ID` Client ID to connect to MQTT as. Pick something unique.
+- `MQTT_HOST` Hostname of your MQTT broker (without `mqtt://` or port)
+- `MQTT_HASS_DISCOVERY_BASE` The base topic for Home Assistant discovery, almost definitely `homeassistant`
+- `HASS_DEVICE_NAME` Friendly name of the device, e.g. `Hallway Vindskrivare`
+- `HASS_DEVICE_IDENTIFIER` Unique (preferably short) identifier for the device in Home Assistant. e.g. `hwvindskr`
+- `HASS_DEVICE_SN` Invent a unique serial number for your device
