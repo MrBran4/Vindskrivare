@@ -41,6 +41,7 @@ dependencies = [
  "rand_core",
  "reqwless",
  "rp2040-panic-usb-boot",
+ "rust-mqtt",
  "sen5x-rs",
  "serde",
  "serde-json-core",
@@ -1278,6 +1279,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
 dependencies = [
  "hash32 0.3.1",
+ "serde",
  "stable_deref_trait",
 ]
 
@@ -1884,6 +1886,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01ea03783e5d4bfa7ae0504dea4e5aa7d03d18e1694241de3e102adf8966c355"
 dependencies = [
  "cortex-m",
+]
+
+[[package]]
+name = "rust-mqtt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f71160765f368fd9a84e0955e2ddb6d64ac9018fee1c5323354d6d08c816b40"
+dependencies = [
+ "embedded-io",
+ "embedded-io-async",
+ "heapless 0.8.0",
+ "rand_core",
 ]
 
 [[package]]

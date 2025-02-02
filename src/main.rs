@@ -6,13 +6,13 @@
 #![allow(async_fn_in_trait)]
 
 use core::panic::PanicInfo;
-use core::sync::atomic::{self, Ordering};
 
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
 
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_time::{Duration, Timer, WithTimeout};
 use log::{error, info, warn};
 use rand::RngCore;
 
@@ -21,25 +21,41 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c::InterruptHandler as I2cInterruptHandler;
-use embassy_rp::peripherals::I2C1;
-use embassy_rp::peripherals::{DMA_CH0, I2C0, PIO0, USB};
+use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0, USB};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
 
+use sen55::Readings;
 use static_cell::StaticCell;
+
+mod avg;
+mod config;
+mod hass;
+mod mqtt;
+mod sen55;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
     USBCTRL_IRQ => UsbInterruptHandler<USB>;
     I2C1_IRQ => I2cInterruptHandler<I2C1>;
-    I2C0_IRQ => I2cInterruptHandler<I2C0>;
 });
 
-const WIFI_NETWORK: &str = env!("WF_SSID");
-const WIFI_PASSWORD: &str = env!("WF_PASS");
+static MQTT_RX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
+static MQTT_TX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
+static MQTT_WORKING_BUFFER: StaticCell<[u8; 8192]> = StaticCell::new();
 
-mod net;
-mod sen55;
+// Create channel for the sensor readings to be sent to the MQTT worker
+static SHARED_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, Readings, 10> =
+    embassy_sync::channel::Channel::new();
+
+#[panic_handler]
+fn handle_panic(info: &PanicInfo) -> ! {
+    // This probably won't get written because the logger is its own task, and we're about to reset.
+    error!("Panicking: {}", info);
+
+    // Not with a bang, but with a whimper.
+    cortex_m::peripheral::SCB::sys_reset();
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -56,6 +72,22 @@ async fn main(spawner: Spawner) {
     Timer::after_secs(5).await;
     info!("USB serial logging up");
 
+    // Grab pins for the i2c to the SEN55 sensor.
+    // Note Pin 6 on the sensor is not connected (even to ground).
+    //
+    // Pico VBUS -> Sensor VDD (Pin 1) red
+    // Pico GND  -> Sensor GND (Pin 2) black
+    // Pico GP26 -> Sensor SDA (Pin 3) green
+    // Pico GP27 -> Sensor SCL (Pin 4) yellow
+    // Pico GND  -> Sensor SEL (Pin 5) blue
+    let i2c = embassy_rp::i2c::I2c::new_blocking(
+        p.I2C1,
+        p.PIN_27, // Laballed GP5 on the Pico, NOT the one labelled 'Pin 5' on the pinout!
+        p.PIN_26, // Laballed GP4 on the Pico, NOT the one labelled 'Pin 4' on the pinout!
+        embassy_rp::i2c::Config::default(),
+    );
+
+    // Grab pins for the CYW43
     let pwr = Output::new(p.PIN_23, Level::Low);
     let cs = Output::new(p.PIN_25, Level::High);
     let mut pio = Pio::new(p.PIO0, Irqs);
@@ -70,21 +102,7 @@ async fn main(spawner: Spawner) {
         p.DMA_CH0,
     );
 
-    info!("set up i2c ");
-    /*
-    Pico VBUS  ->  Sensor VDD (Pin 1) red
-    Pico GND   ->  Sensor GND (Pin 2) black
-    Pico GP4   ->  Sensor SDA (Pin 3) green
-    Pico GP5   ->  Sensor SCL (Pin 4) yellow
-    Pico GND   ->  Sensor SEL (Pin 5) blue
-               ->  Sensor NC  (Pin 6) purple (do not connect)
-    */
-    let sda = p.PIN_4; // Marked GP4 on the board
-    let scl = p.PIN_5; // Marked GP5 on the board
-    let i2c =
-        embassy_rp::i2c::I2c::new_blocking(p.I2C0, scl, sda, embassy_rp::i2c::Config::default());
-    info!("i2c configured");
-
+    // Start the CYW43 driver (that's the wifi chip)
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
     let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
@@ -111,18 +129,73 @@ async fn main(spawner: Spawner) {
         seed,
     );
 
+    // Start embassy's network stack and wait for it to be ready
     spawner
         .spawn(net_task(runner))
         .expect("couldn't spawn net task");
 
+    // Wait for the network to be connected
+    wait_for_network(&mut control, &stack).await;
+
+    let mqtt_rx_buffer = MQTT_RX_BUFFER.init([0u8; 4096]);
+    let mqtt_tx_buffer = MQTT_TX_BUFFER.init([0u8; 4096]);
+    let mqtt_working_buffer = MQTT_WORKING_BUFFER.init([0u8; 8192]);
+    spawner
+        .spawn(mqtt::worker(
+            stack,
+            mqtt_rx_buffer,
+            mqtt_tx_buffer,
+            mqtt_working_buffer,
+        ))
+        .expect("Couldn't spawn mqtt task");
+
+    spawner
+        .spawn(sen55::worker(i2c))
+        .expect("Couldn't spawn sen55 task");
+
+    loop {
+        info!("Main loop");
+
+        Timer::after(Duration::from_secs(60)).await;
+    }
+}
+
+/// Pipes log messages over USB serial back to whatever host just flashed us.
+#[embassy_executor::task]
+async fn logger_task(driver: Driver<'static, USB>) {
+    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+}
+
+/// Pokes the CYW43 driver to do hardware network stuff.
+#[embassy_executor::task]
+async fn cyw43_task(
+    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
+) -> ! {
+    runner.run().await
+}
+
+/// Pokes embassy's network stack to do software network stuff.
+#[embassy_executor::task]
+async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
+    runner.run().await
+}
+
+/// Wait (possibly forever) for the network to be connected.
+async fn wait_for_network(control: &mut cyw43::Control<'_>, stack: &embassy_net::Stack<'_>) {
+    info!("Waiting for link up...");
+
     loop {
         match control
-            .join(WIFI_NETWORK, JoinOptions::new(WIFI_PASSWORD.as_bytes()))
+            .join(
+                config::WIFI_NETWORK,
+                JoinOptions::new(config::WIFI_PASSWORD.as_bytes()),
+            )
+            .with_timeout(Duration::from_secs(30))
             .await
         {
             Ok(_) => break,
             Err(err) => {
-                warn!("wifi join failed with status: {}", err.status);
+                warn!("wifi join failed with status: {err:?}");
             }
         }
     }
@@ -151,45 +224,4 @@ async fn main(spawner: Spawner) {
     info!("Waiting network stack...");
     stack.wait_config_up().await;
     info!("Stack up!");
-
-    spawner
-        .spawn(net::worker(stack))
-        .expect("Couldn't spawn net task");
-
-    info!("Spawning sen55 task");
-    Timer::after_secs(5).await;
-    spawner
-        .spawn(sen55::worker(i2c))
-        .expect("Couldn't spawn sen55 task");
-
-    loop {
-        info!("Main loop");
-
-        Timer::after(Duration::from_secs(5)).await;
-    }
-}
-
-/// Pipes log messages over USB serial back to whatever just flashed us.
-#[embassy_executor::task]
-async fn logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
-}
-
-#[embassy_executor::task]
-async fn cyw43_task(
-    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-) -> ! {
-    runner.run().await
-}
-
-#[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
-    runner.run().await
-}
-
-#[panic_handler]
-fn handle_panic(info: &PanicInfo) -> ! {
-    error!("Panicking: {}", info);
-
-    cortex_m::peripheral::SCB::sys_reset();
 }
