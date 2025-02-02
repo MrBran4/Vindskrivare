@@ -9,7 +9,7 @@ use rust_mqtt::{
 
 use crate::{config, hass, SHARED_CHANNEL};
 
-/// Publishes updated readings to the MQTT broker.
+/// Publishes updated readings to the MQTT broker, including the initial hass discovery message.
 #[embassy_executor::task]
 pub async fn worker(
     stack: Stack<'static>,

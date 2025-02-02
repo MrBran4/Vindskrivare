@@ -17,7 +17,12 @@ pub struct Readings {
     pub humidity: Option<f32>,
 }
 
-/// Polls the SEN55 sensor and for now just prints the it to serial.
+/// Polls the SEN55 sensor and sends the readings to the shared channel.
+///
+/// If the sensor fails to read too many times in a row, it will attempt to reinit the sensor, and
+/// if that fails the board will be put into reset.
+///
+/// The sensor updates every 1s, is polled every 750ms, is hysterised over 30, 60, and 90 readings.
 #[embassy_executor::task]
 pub async fn worker(i2c: I2c<'static, I2C1, Blocking>) {
     info!("started sen55 worker");

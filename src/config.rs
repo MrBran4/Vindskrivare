@@ -4,6 +4,9 @@ pub const WIFI_PASSWORD: &str = env!("WF_PASS");
 pub const MQTT_CLIENT_ID: &str = env!("MQTT_CLIENT_ID");
 pub const MQTT_HOST: &str = env!("MQTT_HOST");
 
+// Easier to construct all this stuff at compile time than to do it at runtime
+// every time we need to send a message, which is very often.
+
 pub const MQTT_TOPIC_DICSOVERY: &str = concat!(
     env!("MQTT_HASS_DISCOVERY_BASE"),
     "/device/",

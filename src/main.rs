@@ -1,6 +1,3 @@
-//! This example uses the RP Pico W board Wifi chip (cyw43).
-//! Connects to Wifi network and makes a web request to get the current time.
-
 #![no_std]
 #![no_main]
 #![allow(async_fn_in_trait)]
@@ -68,8 +65,8 @@ async fn main(spawner: Spawner) {
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
 
-    // Wait for USB serial to be ready (or for the other end to start listening, not sure)
-    Timer::after_secs(5).await;
+    // Wait for USB serial to be ready (or for the other end to start listening, not sure, just know it's needed)
+    Timer::after_secs(4).await;
     info!("USB serial logging up");
 
     // Grab pins for the i2c to the SEN55 sensor.
@@ -102,7 +99,7 @@ async fn main(spawner: Spawner) {
         p.DMA_CH0,
     );
 
-    // Start the CYW43 driver (that's the wifi chip)
+    // Start the CYW43 driver (the wifi chip)
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
     let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
@@ -223,5 +220,6 @@ async fn wait_for_network(control: &mut cyw43::Control<'_>, stack: &embassy_net:
 
     info!("Waiting network stack...");
     stack.wait_config_up().await;
+
     info!("Stack up!");
 }

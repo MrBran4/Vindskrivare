@@ -1,3 +1,5 @@
+/// General purpose O(1) rolling average calculator.
+/// Keeps track of the last L values and provides a rolling average of them.
 pub struct Hysterysiser<const L: usize> {
     values: [f32; L],
     index: usize,
@@ -32,8 +34,8 @@ impl<const L: usize> Hysterysiser<L> {
         self.index = (self.index + 1) % L;
     }
 
-    /// Get the rolling average of the last L values.
-    /// Returns None if there aren't enough readings yet.
+    /// Get the rolling average of the last L values, or
+    /// None if there aren't enough readings yet.
     pub fn average(&self) -> Option<f32> {
         if !self.ready {
             return None;
