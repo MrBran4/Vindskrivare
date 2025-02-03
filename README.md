@@ -2,7 +2,7 @@
 
 Make your own air quality sensor similar to IKEA's Vindstyrka using a Pi Pico W and Sensirion SEN5x sensor.
 
-#### Why not just by a Vindstyrka?
+#### Why not just buy a Vindstyrka?
 
 The Vindstyrka is a pretty sound device and actually has a Sensirion SEN54 inside of it, so it's not that different.
 
