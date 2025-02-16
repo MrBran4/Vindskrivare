@@ -25,6 +25,7 @@ use embassy_rp::i2c::InterruptHandler as I2cInterruptHandler;
 use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi::{self, Spi};
+use ui::{ConnectionStage, UiController};
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -37,6 +38,7 @@ mod config;
 mod hass;
 mod mqtt;
 mod sen55;
+mod ui;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -103,7 +105,7 @@ async fn main(spawner: Spawner) {
     let lcd_width = 240_u32;
     let lcd_height = 280_u32;
     // Initialize the display
-    let mut display = ST7789V2::new(
+    let display: ui::Display = ST7789V2::new(
         display_spi,
         display_dc,
         display_cs,
@@ -114,13 +116,16 @@ async fn main(spawner: Spawner) {
         lcd_height,
     );
 
-    let mut delay_wrapper = DelayWrapper::new(&mut delay);
+    let delay_wrapper = DelayWrapper::new(&mut delay);
 
-    // Reset and then initialise the display
-    display.hard_reset(&mut delay_wrapper).unwrap();
-    Timer::after_millis(500).await;
-    display.init(&mut delay_wrapper).unwrap();
-    display.clear_screen(Rgb565::BLACK.into_storage()).unwrap(); //TODO: be less green and ugly
+    // Hand off display to the UI module
+    let mut display = ui::UiController::new(display, delay_wrapper);
+
+    display.init().await;
+
+    display.render_startup();
+
+    Timer::after_secs(1).await;
 
     // Grab pins for the CYW43 (wifi chip); set up SPI to it.
     // Wifi chip is integrated into the pico and we use PIO to drive SPI to it.
@@ -171,7 +176,7 @@ async fn main(spawner: Spawner) {
         .expect("couldn't spawn net task");
 
     // Wait for the network to be connected
-    wait_for_network(&mut control, &stack).await;
+    wait_for_network(&mut control, &stack, &mut display).await;
 
     let mqtt_rx_buffer = MQTT_RX_BUFFER.init([0u8; 4096]);
     let mqtt_tx_buffer = MQTT_TX_BUFFER.init([0u8; 4096]);
@@ -185,9 +190,13 @@ async fn main(spawner: Spawner) {
         ))
         .expect("Couldn't spawn mqtt task");
 
+    display.render_connecting(ConnectionStage::Mqtt);
+
     spawner
         .spawn(sen55::worker(i2c))
         .expect("Couldn't spawn sen55 task");
+
+    display.render_connecting(ConnectionStage::Ready);
 
     loop {
         info!("Main loop");
@@ -211,8 +220,13 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
 }
 
 /// Wait (possibly forever) for the network to be connected.
-async fn wait_for_network(control: &mut cyw43::Control<'_>, stack: &embassy_net::Stack<'_>) {
+async fn wait_for_network(
+    control: &mut cyw43::Control<'_>,
+    stack: &embassy_net::Stack<'_>,
+    display: &mut UiController<'_>,
+) {
     info!("Waiting for link up...");
+    display.render_connecting(ConnectionStage::Wifi);
 
     loop {
         match control
@@ -229,6 +243,8 @@ async fn wait_for_network(control: &mut cyw43::Control<'_>, stack: &embassy_net:
             }
         }
     }
+
+    display.render_connecting(ConnectionStage::Dhcp);
 
     // Wait for DHCP, not necessary when using static IP
     info!("Waiting for DHCP...");

@@ -17,6 +17,58 @@ pub struct Readings {
     pub humidity: Option<f32>,
 }
 
+/// A vague health indicator for the overall readings.
+pub enum Health {
+    Ok,
+    Warning,
+    Dangerous,
+}
+
+impl Readings {
+    pub fn has_all(&self) -> bool {
+        self.pm1_0.is_some()
+            && self.pm2_5.is_some()
+            && self.pm4_0.is_some()
+            && self.pm10_0.is_some()
+            && self.voc_index.is_some()
+            && self.nox_index.is_some()
+            && self.temperature.is_some()
+            && self.humidity.is_some()
+    }
+
+    pub fn health(&self) -> Health {
+        // If any of the readings are None, we can't calculate the health.
+        if !self.has_all() {
+            return Health::Ok;
+        }
+
+        // If any of the readings are above the threshold, we're in the danger zone.
+        // unwrapping is safe because we've already checked that all the readings are Some.
+        if self.pm1_0.unwrap() > 100.0
+            || self.pm2_5.unwrap() > 100.0
+            || self.pm4_0.unwrap() > 100.0
+            || self.pm10_0.unwrap() > 100.0
+            || self.voc_index.unwrap() > 400.0
+            || self.nox_index.unwrap() > 5.0
+        {
+            return Health::Dangerous;
+        }
+
+        // Same thing but with warning thresholds.
+        if self.pm1_0.unwrap() > 25.0
+            || self.pm2_5.unwrap() > 25.0
+            || self.pm4_0.unwrap() > 25.0
+            || self.pm10_0.unwrap() > 25.0
+            || self.voc_index.unwrap() > 225.0
+            || self.nox_index.unwrap() > 2.5
+        {
+            return Health::Warning;
+        }
+
+        Health::Ok
+    }
+}
+
 /// Polls the SEN55 sensor and sends the readings to the shared channel.
 ///
 /// If the sensor fails to read too many times in a row, it will attempt to reinit the sensor, and
