@@ -13,7 +13,17 @@ use u8g2_fonts::types::HorizontalAlignment;
 use u8g2_fonts::FontRenderer;
 
 use crate::sen55::{Health, Readings};
-use crate::DelayWrapper;
+use crate::{DelayWrapper, UI_READING_CHANNEL};
+
+use embassy_net::{dns::DnsQueryType, tcp::TcpSocket, Stack};
+use log::{error, info};
+use rust_mqtt::{
+    client::{client::MqttClient, client_config::ClientConfig},
+    packet::v5::reason_codes::ReasonCode,
+    utils::rng_generator::CountingRng,
+};
+
+use crate::{config, hass, MQTT_READING_CHANNEL};
 
 use {defmt_rtt as _, panic_probe as _};
 
@@ -240,7 +250,7 @@ fn draw_reading(display: &mut Display, pos: Point, value: &Option<f32>) {
             write!(&mut buf, "{:.2}", v).unwrap();
             buf.as_str()
         }
-        None => "N/A",
+        None => "...",
     };
 
     font.render_aligned(
@@ -252,4 +262,16 @@ fn draw_reading(display: &mut Display, pos: Point, value: &Option<f32>) {
         display,
     )
     .expect("couldn't render time");
+}
+
+/// Consumes a UiController and draws readings to it whenever
+/// new ones are recieved on the UI channel.
+#[embassy_executor::task]
+pub async fn worker(mut ui: UiController<'static>) {
+    info!("started ui worker");
+
+    loop {
+        let readings = UI_READING_CHANNEL.receive().await;
+        ui.render_readings(readings);
+    }
 }

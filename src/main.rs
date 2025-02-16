@@ -2,8 +2,6 @@
 #![no_main]
 #![allow(async_fn_in_trait)]
 
-//!TODO: Report more things like uptime, wifi strength
-
 use cortex_m::delay::Delay;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
@@ -12,8 +10,6 @@ use defmt::{info, warn};
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_time::{Duration, Timer, WithTimeout};
-use embedded_graphics::pixelcolor::Rgb565;
-use embedded_graphics::prelude::{IntoStorage, RgbColor};
 use embedded_hal_1::delay::DelayNs;
 use rand::RngCore;
 
@@ -52,7 +48,11 @@ static MQTT_TX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
 static MQTT_WORKING_BUFFER: StaticCell<[u8; 8192]> = StaticCell::new();
 
 // Create channel for the sensor readings to be sent to the MQTT worker
-static SHARED_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, Readings, 10> =
+static MQTT_READING_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, Readings, 10> =
+    embassy_sync::channel::Channel::new();
+
+// Create channel for the sensor readings to be sent to the UI
+static UI_READING_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, Readings, 10> =
     embassy_sync::channel::Channel::new();
 
 #[embassy_executor::main]
@@ -197,6 +197,10 @@ async fn main(spawner: Spawner) {
         .expect("Couldn't spawn sen55 task");
 
     display.render_connecting(ConnectionStage::Ready);
+
+    spawner
+        .spawn(ui::worker(display))
+        .expect("Couldn't spawn ui task");
 
     loop {
         info!("Main loop");
