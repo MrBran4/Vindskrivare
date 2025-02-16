@@ -100,21 +100,20 @@ async fn main(spawner: Spawner) {
         embassy_rp::i2c::Config::default(),
     );
 
-    // Grab pins for display driver
-    // SPI0 setup
-    let display_spi = spi::Spi::new_txonly(
-        p.SPI0,
-        p.PIN_18, // SCK
-        p.PIN_19, // MOSI (DIN)
-        p.DMA_CH1,
-        spi::Config::default(),
-    );
+    let mut display_spi_cfg = spi::Config::default();
+    display_spi_cfg.frequency = 64_000_000_u32; // 64 MHz
+    display_spi_cfg.phase = spi::Phase::CaptureOnSecondTransition;
+    display_spi_cfg.polarity = spi::Polarity::IdleHigh;
 
-    // Control pins
+    // Display pins
+    let display_clk = p.PIN_18; // GP18 -> CLK
+    let display_mosi = p.PIN_19; // GP19 -> DIN
     let display_dc = Output::new(p.PIN_16, Level::Low);
-    let display_rst = Output::new(p.PIN_21, Level::High);
+    let display_rst = Output::new(p.PIN_21, Level::Low);
     let display_cs = Output::new(p.PIN_17, Level::High);
     let _display_bl = Output::new(p.PIN_22, Level::High);
+
+    let display_spi = Spi::new_blocking_txonly(p.SPI0, display_clk, display_mosi, display_spi_cfg);
 
     let screen_direction = st7789v2_driver::VERTICAL;
     let lcd_width = 240_u32;
@@ -136,6 +135,8 @@ async fn main(spawner: Spawner) {
     display.hard_reset(&mut delay_wrapper).unwrap();
 
     Timer::after_millis(500).await;
+
+    display.init(&mut delay_wrapper).unwrap();
 
     display.clear_screen(Rgb565::GREEN.into_storage()).unwrap();
 
