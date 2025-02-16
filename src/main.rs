@@ -1,10 +1,11 @@
 #![no_std]
 #![no_main]
 #![allow(async_fn_in_trait)]
+#![feature(impl_trait_in_assoc_type)]
 
 use cortex_m::delay::Delay;
 use cyw43::JoinOptions;
-use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
+use cyw43_pio::{DEFAULT_CLOCK_DIVIDER, PioSpi};
 
 use defmt::{info, warn};
 use embassy_executor::Spawner;
@@ -15,7 +16,7 @@ use rand::RngCore;
 
 use embassy_net::{Config, StackResources};
 use embassy_rp::bind_interrupts;
-use embassy_rp::clocks::{clk_sys_freq, RoscRng};
+use embassy_rp::clocks::{RoscRng, clk_sys_freq};
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c::InterruptHandler as I2cInterruptHandler;
 use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1};
