@@ -1,7 +1,7 @@
 use core::fmt::Write;
 use core::mem::discriminant;
 
-use defmt::info;
+use defmt::{error, info};
 use embassy_time::Timer;
 use embedded_graphics::prelude::{DrawTarget, IntoStorage, Point, RgbColor};
 use embedded_graphics::{image::Image, image::ImageRawLE, pixelcolor::Rgb565, Drawable};
@@ -18,17 +18,14 @@ use crate::{DelayWrapper, UI_READING_CHANNEL};
 
 use {defmt_rtt as _, panic_probe as _};
 
-use st7789v2_driver::{FrameBuffer, ST7789V2};
+use st7789v2_driver::{FrameBuffer, Region, ST7789V2};
 
 pub type Display =
     ST7789V2<Spi<'static, SPI0, Blocking>, Output<'static>, Output<'static>, Output<'static>>;
 
 const DISPLAY_W: u32 = 240;
 const DISPLAY_H: u32 = 280;
-const CLEAR_STRIP_WIDTH: u32 = 71;
-
-const CLEAR_STRIP_L_POS: Point = Point::new(58, 0);
-const CLEAR_STRIP_R_POS: Point = Point::new(163, 0);
+const CLEAR_STRIP_W: u32 = 71;
 
 const READING_SEP: i32 = 60;
 const FIRST_READING_Y: i32 = 37;
@@ -46,6 +43,57 @@ const HMTY_POS: Point = reading_pos(168, 3);
 const fn reading_pos(x: i32, index: u32) -> Point {
     Point::new(x, FIRST_READING_Y + (READING_SEP * index as i32))
 }
+
+const READING_REGIONS: [Region; 8] = [
+    Region {
+        x: PM1_POS.x as u16,
+        y: PM1_POS.y as u16,
+        width: CLEAR_STRIP_W,
+        height: 24,
+    },
+    Region {
+        x: PM25_POS.x as u16,
+        y: PM25_POS.y as u16,
+        width: CLEAR_STRIP_W,
+        height: 24,
+    },
+    Region {
+        x: PM4_POS.x as u16,
+        y: PM4_POS.y as u16,
+        width: CLEAR_STRIP_W,
+        height: 24,
+    },
+    Region {
+        x: PM10_POS.x as u16,
+        y: PM10_POS.y as u16,
+        width: CLEAR_STRIP_W,
+        height: 24,
+    },
+    Region {
+        x: TVOC_POS.x as u16,
+        y: TVOC_POS.y as u16,
+        width: CLEAR_STRIP_W,
+        height: 24,
+    },
+    Region {
+        x: TNOX_POS.x as u16,
+        y: TNOX_POS.y as u16,
+        width: CLEAR_STRIP_W,
+        height: 24,
+    },
+    Region {
+        x: TEMP_POS.x as u16,
+        y: TEMP_POS.y as u16,
+        width: CLEAR_STRIP_W,
+        height: 24,
+    },
+    Region {
+        x: HMTY_POS.x as u16,
+        y: HMTY_POS.y as u16,
+        width: CLEAR_STRIP_W,
+        height: 24,
+    },
+];
 
 const RAW_BG_STARTUP: ImageRawLE<'static, Rgb565> =
     ImageRawLE::new(include_bytes!("../ui/raw/startup.rgb565"), DISPLAY_W);
@@ -75,66 +123,26 @@ const RAW_CONNECTING_READY: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
     DISPLAY_W,
 );
 
-const RAW_BG_READINGS_OK: Backgrounds = Backgrounds {
-    bg: ImageRawLE::new(
-        include_bytes!("../ui/raw/readings-default.rgb565"),
-        DISPLAY_W,
-    ),
-    clear_l: ImageRawLE::new(
-        include_bytes!("../ui/raw/readings-default-blank-l.rgb565"),
-        CLEAR_STRIP_WIDTH,
-    ),
-    clear_r: ImageRawLE::new(
-        include_bytes!("../ui/raw/readings-default-blank-r.rgb565"),
-        CLEAR_STRIP_WIDTH,
-    ),
-};
+const RAW_BG_READINGS_OK: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
+    include_bytes!("../ui/raw/readings-default.rgb565"),
+    DISPLAY_W,
+);
 
-const RAW_BG_READINGS_UNHAPPY: Backgrounds = Backgrounds {
-    bg: ImageRawLE::new(
-        include_bytes!("../ui/raw/readings-unhappy.rgb565"),
-        DISPLAY_W,
-    ),
-    clear_l: ImageRawLE::new(
-        include_bytes!("../ui/raw/readings-unhappy-blank-l.rgb565"),
-        CLEAR_STRIP_WIDTH,
-    ),
-    clear_r: ImageRawLE::new(
-        include_bytes!("../ui/raw/readings-unhappy-blank-r.rgb565"),
-        CLEAR_STRIP_WIDTH,
-    ),
-};
+const RAW_BG_READINGS_UNHAPPY: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
+    include_bytes!("../ui/raw/readings-unhappy.rgb565"),
+    DISPLAY_W,
+);
 
-const RAW_BG_READINGS_DANGEROUS: Backgrounds = Backgrounds {
-    bg: ImageRawLE::new(
-        include_bytes!("../ui/raw/readings-dangerous.rgb565"),
-        DISPLAY_W,
-    ),
-    clear_l: ImageRawLE::new(
-        include_bytes!("../ui/raw/readings-dangerous-blank-l.rgb565"),
-        CLEAR_STRIP_WIDTH,
-    ),
-    clear_r: ImageRawLE::new(
-        include_bytes!("../ui/raw/readings-dangerous-blank-r.rgb565"),
-        CLEAR_STRIP_WIDTH,
-    ),
-};
-
-type UnderlyingFramebuffer = [u8; 240 * 280];
+const RAW_BG_READINGS_DANGEROUS: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
+    include_bytes!("../ui/raw/readings-dangerous.rgb565"),
+    DISPLAY_W,
+);
 
 pub struct UiController {
     display: Display,
 
     /// Provides the ability to delay for a certain amount of time.
     delay: DelayWrapper,
-
-    /// The health of the previous reading.
-    /// Used to determine whether we need to redraw the background or just the clear strips.
-    /// (if the health hasn't changed, the background colour will be the same)
-    last_health: Option<Health>,
-
-    /// The framebuffer for the display
-    last_frame: UnderlyingFramebuffer,
 }
 
 #[allow(unused)]
@@ -146,20 +154,9 @@ pub enum ConnectionStage {
     Ready,
 }
 
-struct Backgrounds {
-    bg: ImageRawLE<'static, Rgb565>,
-    clear_l: ImageRawLE<'static, Rgb565>,
-    clear_r: ImageRawLE<'static, Rgb565>,
-}
-
 impl UiController {
     pub fn new(display: Display, delay: DelayWrapper) -> Self {
-        Self {
-            display,
-            delay,
-            last_health: None,
-            last_frame: [0; 240 * 280],
-        }
+        Self { display, delay }
     }
 
     pub async fn init(&mut self) {
@@ -169,6 +166,11 @@ impl UiController {
         self.display
             .clear_screen(Rgb565::BLACK.into_storage())
             .unwrap();
+
+        // Set up the regions for the readings
+        for region in READING_REGIONS.iter() {
+            self.display.store_region(*region).unwrap();
+        }
     }
 
     pub fn render_startup(&mut self) {
@@ -199,28 +201,10 @@ impl UiController {
 
         let mut this_frame_raw = [0; 240 * 280];
         let mut this_frame_buffer = FrameBuffer::new(&mut this_frame_raw, DISPLAY_W, DISPLAY_H);
-        let last_frame_buffer = FrameBuffer::new(&mut self.last_frame, DISPLAY_W, DISPLAY_H);
 
-        // If the health has changed, redraw the background
-        // Otherwise, just redraw the clear strips
-        match &self.last_health {
-            Some(last_health) if discriminant(last_health) == discriminant(&new_health) => {
-                // Last health is same as new health, just redraw the clear strips
-                let img = Image::new(&bg.clear_l, CLEAR_STRIP_L_POS);
-                img.draw(&mut this_frame_buffer).unwrap();
-
-                let img = Image::new(&bg.clear_r, CLEAR_STRIP_R_POS);
-                img.draw(&mut this_frame_buffer).unwrap();
-            }
-            _ => {
-                // Last health is different (or unset), redraw the background
-                let img = Image::new(&bg.bg, Point::zero());
-                img.draw(&mut this_frame_buffer).unwrap();
-            }
-        }
-
-        // Update the last health so we can compare it next time
-        self.last_health = Some(new_health);
+        // Last health is different (or unset), redraw the background
+        let img = Image::new(bg, Point::zero());
+        img.draw(&mut this_frame_buffer).unwrap();
 
         // Draw the readings
         draw_reading(&mut this_frame_buffer, PM1_POS, &readings.pm1_0);
@@ -232,16 +216,14 @@ impl UiController {
         draw_reading(&mut this_frame_buffer, TEMP_POS, &readings.temperature);
         draw_reading(&mut this_frame_buffer, HMTY_POS, &readings.humidity);
 
-        // Diff the two frames and only update the changed parts
+        // render all the updated regions
         if self
             .display
-            .draw_iter(this_frame_buffer.diff_with(&last_frame_buffer))
+            .show_regions(this_frame_buffer.get_buffer())
             .is_err()
         {
-            defmt::error!("couldn't draw to display");
+            error!("Failed to render regions");
         };
-
-        self.last_frame = this_frame_raw;
     }
 }
 

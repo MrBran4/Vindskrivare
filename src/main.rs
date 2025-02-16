@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![allow(async_fn_in_trait)]
-#![feature(impl_trait_in_assoc_type)]
 
 use cortex_m::delay::Delay;
 use cyw43::JoinOptions;

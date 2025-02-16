@@ -2,12 +2,11 @@
 name = "Vindskrivare"
 description = "Pro version of the IKEA Vindstyrka using the same SEN55 sensor but exposing pm1.0, pm2.5, pm4, pm10, VOC, NOx, Temperature and Humidity over MQTT"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 embassy-executor = { version = "0.7.0", features = [
-    #"task-arena-size-98304",
-    "nightly",
+    "task-arena-size-163840",
     "arch-cortex-m",
     "executor-thread",
     "executor-interrupt",
