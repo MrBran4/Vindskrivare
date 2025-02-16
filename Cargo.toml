@@ -5,22 +5,28 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-embassy-embedded-hal = { version = "0.3.0", features = [] }
-embassy-sync = { version = "0.6.2", features = [] }
+embassy-embedded-hal = { version = "0.3.0", features = ["defmt"] }
+embassy-sync = { version = "0.6.2", features = ["defmt"] }
 embassy-executor = { version = "0.7.0", features = [
     "task-arena-size-98304",
     "arch-cortex-m",
     "executor-thread",
     "executor-interrupt",
+    "defmt",
 ] }
-embassy-time = { version = "0.4.0", features = [] }
+embassy-time = { version = "0.4.0", features = [
+    "defmt",
+    "defmt-timestamp-uptime",
+] }
 embassy-rp = { version = "0.3.0", features = [
+    "defmt",
     "unstable-pac",
     "time-driver",
     "critical-section-impl",
     "rp2040",
 ] }
 embassy-net = { version = "0.6.0", features = [
+    "defmt",
     "tcp",
     "udp",
     "raw",
@@ -33,8 +39,11 @@ embassy-net = { version = "0.6.0", features = [
 ] }
 embassy-futures = { version = "0.1.0" }
 embassy-usb-logger = { version = "0.4.0" }
-cyw43 = { version = "0.3.0", features = ["firmware-logs"] }
-cyw43-pio = { version = "0.3.0", features = [] }
+cyw43 = { version = "0.3.0", features = ["defmt", "firmware-logs"] }
+cyw43-pio = { version = "0.3.0", features = ["defmt"] }
+
+defmt = "0.3"
+defmt-rtt = "0.4"
 
 serde = { version = "1.0.203", default-features = false, features = ["derive"] }
 serde-json-core = "0.5.1"
@@ -42,6 +51,7 @@ serde-json-core = "0.5.1"
 cortex-m = { version = "0.7.6", features = ["inline-asm"] }
 cortex-m-rt = "0.7.0"
 heapless = { version = "0.8", features = ["serde"] }
+panic-probe = { version = "0.3", features = ["print-defmt"] }
 
 embedded-hal-1 = { package = "embedded-hal", version = "1.0" }
 embedded-hal-async = "1.0"

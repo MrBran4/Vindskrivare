@@ -2,17 +2,18 @@
 # Allows defmt to display log locations even in release
 debug = true
 
-# If you're a fancy pants with your fancy jtag probe, uncomment this:
-# [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-# runner = "probe-rs run --chip RP2040"
-
-# Otherwise us proles:
-# Add this
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "elf2uf2-rs --deploy --serial --verbose"
+runner = [
+    "probe-rs",
+    "run",
+    "--chip",
+    "RP2040",
+    "--log-format",
+    "{L} {f:>10}: {s}",
+]
 
 [build]
 target = "thumbv6m-none-eabi" # Cortex-M0 and Cortex-M0+
 
 [env]
-DEFMT_LOG = "debug"
+DEFMT_LOG = "info"
