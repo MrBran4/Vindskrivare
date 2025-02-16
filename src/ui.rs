@@ -1,8 +1,9 @@
 use core::fmt::Write;
 use core::mem::discriminant;
 
+use defmt::info;
 use embassy_time::Timer;
-use embedded_graphics::prelude::{Dimensions, IntoStorage, Point, RgbColor};
+use embedded_graphics::prelude::{DrawTarget, IntoStorage, Point, RgbColor};
 use embedded_graphics::{image::Image, image::ImageRawLE, pixelcolor::Rgb565, Drawable};
 
 use embassy_rp::gpio::Output;
@@ -15,24 +16,15 @@ use u8g2_fonts::FontRenderer;
 use crate::sen55::{Health, Readings};
 use crate::{DelayWrapper, UI_READING_CHANNEL};
 
-use embassy_net::{dns::DnsQueryType, tcp::TcpSocket, Stack};
-use log::{error, info};
-use rust_mqtt::{
-    client::{client::MqttClient, client_config::ClientConfig},
-    packet::v5::reason_codes::ReasonCode,
-    utils::rng_generator::CountingRng,
-};
-
-use crate::{config, hass, MQTT_READING_CHANNEL};
-
 use {defmt_rtt as _, panic_probe as _};
 
-use st7789v2_driver::ST7789V2;
+use st7789v2_driver::{FrameBuffer, ST7789V2};
 
 pub type Display =
     ST7789V2<Spi<'static, SPI0, Blocking>, Output<'static>, Output<'static>, Output<'static>>;
 
-const IMG_WIDTH: u32 = 240;
+const DISPLAY_W: u32 = 240;
+const DISPLAY_H: u32 = 280;
 const CLEAR_STRIP_WIDTH: u32 = 71;
 
 const CLEAR_STRIP_L_POS: Point = Point::new(58, 0);
@@ -56,37 +48,37 @@ const fn reading_pos(x: i32, index: u32) -> Point {
 }
 
 const RAW_BG_STARTUP: ImageRawLE<'static, Rgb565> =
-    ImageRawLE::new(include_bytes!("../ui/raw/startup.rgb565"), IMG_WIDTH);
+    ImageRawLE::new(include_bytes!("../ui/raw/startup.rgb565"), DISPLAY_W);
 
 const RAW_CONNECTING_WIFI: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
     include_bytes!("../ui/raw/connecting-wifi.rgb565"),
-    IMG_WIDTH,
+    DISPLAY_W,
 );
 
 const RAW_CONNECTING_DHCP: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
     include_bytes!("../ui/raw/connecting-dhcp.rgb565"),
-    IMG_WIDTH,
+    DISPLAY_W,
 );
 
 const RAW_CONNECTING_MQTT: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
     include_bytes!("../ui/raw/connecting-mqtt.rgb565"),
-    IMG_WIDTH,
+    DISPLAY_W,
 );
 
 const RAW_CONNECTING_SEN55: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
     include_bytes!("../ui/raw/connecting-sen55.rgb565"),
-    IMG_WIDTH,
+    DISPLAY_W,
 );
 
 const RAW_CONNECTING_READY: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
     include_bytes!("../ui/raw/connecting-ready.rgb565"),
-    IMG_WIDTH,
+    DISPLAY_W,
 );
 
 const RAW_BG_READINGS_OK: Backgrounds = Backgrounds {
     bg: ImageRawLE::new(
         include_bytes!("../ui/raw/readings-default.rgb565"),
-        IMG_WIDTH,
+        DISPLAY_W,
     ),
     clear_l: ImageRawLE::new(
         include_bytes!("../ui/raw/readings-default-blank-l.rgb565"),
@@ -101,7 +93,7 @@ const RAW_BG_READINGS_OK: Backgrounds = Backgrounds {
 const RAW_BG_READINGS_UNHAPPY: Backgrounds = Backgrounds {
     bg: ImageRawLE::new(
         include_bytes!("../ui/raw/readings-unhappy.rgb565"),
-        IMG_WIDTH,
+        DISPLAY_W,
     ),
     clear_l: ImageRawLE::new(
         include_bytes!("../ui/raw/readings-unhappy-blank-l.rgb565"),
@@ -116,7 +108,7 @@ const RAW_BG_READINGS_UNHAPPY: Backgrounds = Backgrounds {
 const RAW_BG_READINGS_DANGEROUS: Backgrounds = Backgrounds {
     bg: ImageRawLE::new(
         include_bytes!("../ui/raw/readings-dangerous.rgb565"),
-        IMG_WIDTH,
+        DISPLAY_W,
     ),
     clear_l: ImageRawLE::new(
         include_bytes!("../ui/raw/readings-dangerous-blank-l.rgb565"),
@@ -128,18 +120,24 @@ const RAW_BG_READINGS_DANGEROUS: Backgrounds = Backgrounds {
     ),
 };
 
-pub struct UiController<'a> {
+type UnderlyingFramebuffer = [u8; 240 * 280];
+
+pub struct UiController {
     display: Display,
 
     /// Provides the ability to delay for a certain amount of time.
-    delay: DelayWrapper<'a>,
+    delay: DelayWrapper,
 
     /// The health of the previous reading.
     /// Used to determine whether we need to redraw the background or just the clear strips.
     /// (if the health hasn't changed, the background colour will be the same)
     last_health: Option<Health>,
+
+    /// The framebuffer for the display
+    last_frame: UnderlyingFramebuffer,
 }
 
+#[allow(unused)]
 pub enum ConnectionStage {
     Wifi,
     Dhcp,
@@ -154,12 +152,13 @@ struct Backgrounds {
     clear_r: ImageRawLE<'static, Rgb565>,
 }
 
-impl<'a> UiController<'a> {
-    pub fn new(display: Display, delay: DelayWrapper<'a>) -> Self {
+impl UiController {
+    pub fn new(display: Display, delay: DelayWrapper) -> Self {
         Self {
             display,
             delay,
             last_health: None,
+            last_frame: [0; 240 * 280],
         }
     }
 
@@ -198,21 +197,25 @@ impl<'a> UiController<'a> {
             Health::Dangerous => &RAW_BG_READINGS_DANGEROUS,
         };
 
+        let mut this_frame_raw = [0; 240 * 280];
+        let mut this_frame_buffer = FrameBuffer::new(&mut this_frame_raw, DISPLAY_W, DISPLAY_H);
+        let last_frame_buffer = FrameBuffer::new(&mut self.last_frame, DISPLAY_W, DISPLAY_H);
+
         // If the health has changed, redraw the background
         // Otherwise, just redraw the clear strips
         match &self.last_health {
             Some(last_health) if discriminant(last_health) == discriminant(&new_health) => {
                 // Last health is same as new health, just redraw the clear strips
                 let img = Image::new(&bg.clear_l, CLEAR_STRIP_L_POS);
-                img.draw(&mut self.display).unwrap();
+                img.draw(&mut this_frame_buffer).unwrap();
 
                 let img = Image::new(&bg.clear_r, CLEAR_STRIP_R_POS);
-                img.draw(&mut self.display).unwrap();
+                img.draw(&mut this_frame_buffer).unwrap();
             }
             _ => {
                 // Last health is different (or unset), redraw the background
                 let img = Image::new(&bg.bg, Point::zero());
-                img.draw(&mut self.display).unwrap();
+                img.draw(&mut this_frame_buffer).unwrap();
             }
         }
 
@@ -220,18 +223,33 @@ impl<'a> UiController<'a> {
         self.last_health = Some(new_health);
 
         // Draw the readings
-        draw_reading(&mut self.display, PM1_POS, &readings.pm1_0);
-        draw_reading(&mut self.display, PM25_POS, &readings.pm2_5);
-        draw_reading(&mut self.display, PM4_POS, &readings.pm4_0);
-        draw_reading(&mut self.display, PM10_POS, &readings.pm10_0);
-        draw_reading(&mut self.display, TVOC_POS, &readings.voc_index);
-        draw_reading(&mut self.display, TNOX_POS, &readings.nox_index);
-        draw_reading(&mut self.display, TEMP_POS, &readings.temperature);
-        draw_reading(&mut self.display, HMTY_POS, &readings.humidity);
+        draw_reading(&mut this_frame_buffer, PM1_POS, &readings.pm1_0);
+        draw_reading(&mut this_frame_buffer, PM25_POS, &readings.pm2_5);
+        draw_reading(&mut this_frame_buffer, PM4_POS, &readings.pm4_0);
+        draw_reading(&mut this_frame_buffer, PM10_POS, &readings.pm10_0);
+        draw_reading(&mut this_frame_buffer, TVOC_POS, &readings.voc_index);
+        draw_reading(&mut this_frame_buffer, TNOX_POS, &readings.nox_index);
+        draw_reading(&mut this_frame_buffer, TEMP_POS, &readings.temperature);
+        draw_reading(&mut this_frame_buffer, HMTY_POS, &readings.humidity);
+
+        // Diff the two frames and only update the changed parts
+        if self
+            .display
+            .draw_iter(this_frame_buffer.diff_with(&last_frame_buffer))
+            .is_err()
+        {
+            defmt::error!("couldn't draw to display");
+        };
+
+        self.last_frame = this_frame_raw;
     }
 }
 
-fn draw_reading(display: &mut Display, pos: Point, value: &Option<f32>) {
+fn draw_reading<D>(display: &mut D, pos: Point, value: &Option<f32>)
+where
+    D: DrawTarget<Color = Rgb565>,
+    <D as DrawTarget>::Error: core::fmt::Debug,
+{
     let font = FontRenderer::new::<u8g2_fonts::fonts::u8g2_font_logisoso24_tn>();
 
     let mut buf = String::<8>::new();
@@ -267,7 +285,7 @@ fn draw_reading(display: &mut Display, pos: Point, value: &Option<f32>) {
 /// Consumes a UiController and draws readings to it whenever
 /// new ones are recieved on the UI channel.
 #[embassy_executor::task]
-pub async fn worker(mut ui: UiController<'static>) {
+pub async fn worker(mut ui: UiController) {
     info!("started ui worker");
 
     loop {

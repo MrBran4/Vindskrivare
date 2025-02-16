@@ -68,9 +68,6 @@ async fn main(spawner: Spawner) {
 
     info!("Hello world!");
 
-    // Set up the delay for the first core
-    let mut delay = Delay::new(core.SYST, clk_sys_freq());
-
     // Grab pins for the i2c to the SEN55 sensor.
     // Note Pin 6 on the sensor is not connected (even to ground).
     //
@@ -116,7 +113,8 @@ async fn main(spawner: Spawner) {
         lcd_height,
     );
 
-    let delay_wrapper = DelayWrapper::new(&mut delay);
+    // Set up the delay for the first core
+    let delay_wrapper = DelayWrapper::new(Delay::new(core.SYST, clk_sys_freq()));
 
     // Hand off display to the UI module
     let mut display = ui::UiController::new(display, delay_wrapper);
@@ -125,7 +123,7 @@ async fn main(spawner: Spawner) {
 
     display.render_startup();
 
-    Timer::after_secs(1).await;
+    Timer::after_secs(3).await;
 
     // Grab pins for the CYW43 (wifi chip); set up SPI to it.
     // Wifi chip is integrated into the pico and we use PIO to drive SPI to it.
@@ -227,7 +225,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
 async fn wait_for_network(
     control: &mut cyw43::Control<'_>,
     stack: &embassy_net::Stack<'_>,
-    display: &mut UiController<'_>,
+    display: &mut UiController,
 ) {
     info!("Waiting for link up...");
     display.render_connecting(ConnectionStage::Wifi);
@@ -252,15 +250,29 @@ async fn wait_for_network(
 
     // Wait for DHCP, not necessary when using static IP
     info!("Waiting for DHCP...");
+    let mut retries = 60;
     while !stack.is_config_up() {
-        Timer::after_millis(100).await;
-        warn!("DHCP not up yet")
+        Timer::after_millis(500).await;
+        warn!("DHCP not up yet");
+
+        retries -= 1;
+
+        if retries == 0 {
+            panic!("DHCP failed to come up within 30 seconds, giving up and resetting");
+        }
     }
 
     info!("Waiting for link up...");
+    let mut retries = 120;
     while !stack.is_link_up() {
         Timer::after_millis(500).await;
-        warn!("Link not up yet")
+        warn!("Link not up yet");
+
+        retries -= 1;
+
+        if retries == 0 {
+            panic!("Link layer failed to come up within 30 seconds, giving up and resetting");
+        }
     }
     info!("Link up!");
 
@@ -277,17 +289,17 @@ async fn wait_for_network(
     info!("Stack up!");
 }
 
-pub struct DelayWrapper<'a> {
-    delay: &'a mut Delay,
+pub struct DelayWrapper {
+    delay: Delay,
 }
 
-impl<'a> DelayWrapper<'a> {
-    pub fn new(delay: &'a mut Delay) -> Self {
+impl DelayWrapper {
+    pub fn new(delay: Delay) -> Self {
         DelayWrapper { delay }
     }
 }
 
-impl DelayNs for DelayWrapper<'_> {
+impl DelayNs for DelayWrapper {
     fn delay_ns(&mut self, ns: u32) {
         let us = (ns + 999) / 1000; // Convert nanoseconds to microseconds
         self.delay.delay_us(us); // Use microsecond delay
