@@ -53,6 +53,10 @@ log = "0.4"
 rand = { version = "0.8.5", default-features = false }
 sen5x-rs = "0.2.1"
 rust-mqtt = { version = "0.3.0", default-features = false }
+mipidsi = "0.9.0"
+embedded-graphics = "0.8.1"
+embedded-hal-bus = "0.3.0"
+st7789v2_driver = "0.1.0"
 
 [profile.release]
 debug = 2

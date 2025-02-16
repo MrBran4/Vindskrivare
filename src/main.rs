@@ -2,27 +2,35 @@
 #![no_main]
 #![allow(async_fn_in_trait)]
 
+//!TODO: Report more things like uptime, wifi strength
+
 use core::panic::PanicInfo;
 
+use cortex_m::delay::Delay;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
 
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_time::{Duration, Timer, WithTimeout};
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::prelude::{IntoStorage, RgbColor};
+use embedded_hal_1::delay::DelayNs;
 use log::{error, info, warn};
 use rand::RngCore;
 
 use embassy_net::{Config, StackResources};
 use embassy_rp::bind_interrupts;
-use embassy_rp::clocks::RoscRng;
+use embassy_rp::clocks::{clk_sys_freq, RoscRng};
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c::InterruptHandler as I2cInterruptHandler;
-use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0, USB};
+use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1, USB};
 use embassy_rp::pio::{InterruptHandler, Pio};
+use embassy_rp::spi::{self, Spi};
 use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
 
 use sen55::Readings;
+use st7789v2_driver::ST7789V2;
 use static_cell::StaticCell;
 
 mod avg;
@@ -33,8 +41,10 @@ mod sen55;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    PIO1_IRQ_0 => InterruptHandler<PIO1>;
     USBCTRL_IRQ => UsbInterruptHandler<USB>;
     I2C1_IRQ => I2cInterruptHandler<I2C1>;
+    I2C0_IRQ => I2cInterruptHandler<I2C0>;
 });
 
 static MQTT_RX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
@@ -57,6 +67,8 @@ fn handle_panic(info: &PanicInfo) -> ! {
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
+    let core = cortex_m::Peripherals::take().unwrap();
+
     let mut rng = RoscRng;
 
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
@@ -68,6 +80,10 @@ async fn main(spawner: Spawner) {
     // Wait for USB serial to be ready (or for the other end to start listening, not sure, just know it's needed)
     Timer::after_secs(4).await;
     info!("USB serial logging up");
+
+    // Set up the delay for the first core
+
+    let mut delay = Delay::new(core.SYST, clk_sys_freq());
 
     // Grab pins for the i2c to the SEN55 sensor.
     // Note Pin 6 on the sensor is not connected (even to ground).
@@ -83,6 +99,47 @@ async fn main(spawner: Spawner) {
         p.PIN_26, // Laballed GP4 on the Pico, NOT the one labelled 'Pin 4' on the pinout!
         embassy_rp::i2c::Config::default(),
     );
+
+    // Grab pins for display driver
+    // SPI0 setup
+    let display_spi = spi::Spi::new_txonly(
+        p.SPI0,
+        p.PIN_18, // SCK
+        p.PIN_19, // MOSI (DIN)
+        p.DMA_CH1,
+        spi::Config::default(),
+    );
+
+    // Control pins
+    let display_dc = Output::new(p.PIN_16, Level::Low);
+    let display_rst = Output::new(p.PIN_21, Level::High);
+    let display_cs = Output::new(p.PIN_17, Level::High);
+    let _display_bl = Output::new(p.PIN_22, Level::High);
+
+    let screen_direction = st7789v2_driver::VERTICAL;
+    let lcd_width = 240_u32;
+    let lcd_height = 280_u32;
+    // Initialize the display
+    let mut display = ST7789V2::new(
+        display_spi,
+        display_dc,
+        display_cs,
+        display_rst,
+        true,
+        screen_direction,
+        lcd_width,
+        lcd_height,
+    );
+
+    let mut delay_wrapper = DelayWrapper::new(&mut delay);
+
+    display.hard_reset(&mut delay_wrapper).unwrap();
+
+    Timer::after_millis(500).await;
+
+    display.clear_screen(Rgb565::GREEN.into_storage()).unwrap();
+
+    Timer::after_secs(5).await;
 
     // Grab pins for the CYW43
     let pwr = Output::new(p.PIN_23, Level::Low);
@@ -222,4 +279,21 @@ async fn wait_for_network(control: &mut cyw43::Control<'_>, stack: &embassy_net:
     stack.wait_config_up().await;
 
     info!("Stack up!");
+}
+
+pub struct DelayWrapper<'a> {
+    delay: &'a mut Delay,
+}
+
+impl<'a> DelayWrapper<'a> {
+    pub fn new(delay: &'a mut Delay) -> Self {
+        DelayWrapper { delay }
+    }
+}
+
+impl<'a> DelayNs for DelayWrapper<'a> {
+    fn delay_ns(&mut self, ns: u32) {
+        let us = (ns + 999) / 1000; // Convert nanoseconds to microseconds
+        self.delay.delay_us(us); // Use microsecond delay
+    }
 }
