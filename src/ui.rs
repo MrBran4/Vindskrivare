@@ -1,9 +1,12 @@
 use core::fmt::Write;
 use core::mem::discriminant;
 
-use defmt::{error, info};
+use defmt::info;
 use embassy_time::Timer;
-use embedded_graphics::prelude::{DrawTarget, IntoStorage, Point, RgbColor};
+use embedded_graphics::image::{ImageDrawable, ImageDrawableExt, ImageRaw};
+use embedded_graphics::pixelcolor::raw::LittleEndian;
+use embedded_graphics::prelude::{DrawTarget, IntoStorage, Point, RgbColor, Size};
+use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::{image::Image, image::ImageRawLE, pixelcolor::Rgb565, Drawable};
 
 use embassy_rp::gpio::Output;
@@ -143,6 +146,13 @@ pub struct UiController {
 
     /// Provides the ability to delay for a certain amount of time.
     delay: DelayWrapper,
+
+    // The previous health of the readings, used to determine if the background needs to be redrawn
+    last_health: Option<Health>,
+
+    // We only show every 5th reading to reduce flicker.
+    // This counter is used to keep track.
+    reading_skip: u8,
 }
 
 #[allow(unused)]
@@ -156,7 +166,12 @@ pub enum ConnectionStage {
 
 impl UiController {
     pub fn new(display: Display, delay: DelayWrapper) -> Self {
-        Self { display, delay }
+        Self {
+            display,
+            delay,
+            last_health: None,
+            reading_skip: 0,
+        }
     }
 
     pub async fn init(&mut self) {
@@ -191,6 +206,14 @@ impl UiController {
     }
 
     pub fn render_readings(&mut self, readings: Readings) {
+        // Skip some readings to reduce flicker
+        if self.reading_skip < 5 {
+            self.reading_skip += 1;
+            return;
+        } else {
+            self.reading_skip = 0;
+        }
+
         // Work out the health of the readings
         let new_health = readings.health();
         let bg = match new_health {
@@ -199,36 +222,45 @@ impl UiController {
             Health::Dangerous => &RAW_BG_READINGS_DANGEROUS,
         };
 
-        let mut this_frame_raw = [0; 240 * 280];
+        let mut this_frame_raw = [0; 240 * 280 * 2];
         let mut this_frame_buffer = FrameBuffer::new(&mut this_frame_raw, DISPLAY_W, DISPLAY_H);
 
         // Last health is different (or unset), redraw the background
         let img = Image::new(bg, Point::zero());
-        img.draw(&mut this_frame_buffer).unwrap();
+        bg.draw(&mut this_frame_buffer).unwrap();
+
+        if self.last_health.is_none() {
+            // First time rendering, draw background directly to display
+            img.draw(&mut self.display).unwrap();
+        }
+
+        if let Some(last_health) = &self.last_health {
+            if discriminant(&new_health) != discriminant(last_health) {
+                // Health hasn changed, draw background directly to display
+                img.draw(&mut self.display).unwrap();
+            }
+        }
 
         // Draw the readings
-        draw_reading(&mut this_frame_buffer, PM1_POS, &readings.pm1_0);
-        draw_reading(&mut this_frame_buffer, PM25_POS, &readings.pm2_5);
-        draw_reading(&mut this_frame_buffer, PM4_POS, &readings.pm4_0);
-        draw_reading(&mut this_frame_buffer, PM10_POS, &readings.pm10_0);
-        draw_reading(&mut this_frame_buffer, TVOC_POS, &readings.voc_index);
-        draw_reading(&mut this_frame_buffer, TNOX_POS, &readings.nox_index);
-        draw_reading(&mut this_frame_buffer, TEMP_POS, &readings.temperature);
-        draw_reading(&mut this_frame_buffer, HMTY_POS, &readings.humidity);
+        draw_reading(&mut self.display, bg, PM1_POS, &readings.pm1_0);
+        draw_reading(&mut self.display, bg, PM25_POS, &readings.pm2_5);
+        draw_reading(&mut self.display, bg, PM4_POS, &readings.pm4_0);
+        draw_reading(&mut self.display, bg, PM10_POS, &readings.pm10_0);
+        draw_reading(&mut self.display, bg, TVOC_POS, &readings.voc_index);
+        draw_reading(&mut self.display, bg, TNOX_POS, &readings.nox_index);
+        draw_reading(&mut self.display, bg, TEMP_POS, &readings.temperature);
+        draw_reading(&mut self.display, bg, HMTY_POS, &readings.humidity);
 
-        // render all the updated regions
-        if self
-            .display
-            .show_regions(this_frame_buffer.get_buffer())
-            .is_err()
-        {
-            error!("Failed to render regions");
-        };
+        self.last_health = Some(new_health);
     }
 }
 
-fn draw_reading<D>(display: &mut D, pos: Point, value: &Option<f32>)
-where
+fn draw_reading<D>(
+    display: &mut D,
+    bg: &ImageRaw<'static, Rgb565, LittleEndian>,
+    pos: Point,
+    value: &Option<f32>,
+) where
     D: DrawTarget<Color = Rgb565>,
     <D as DrawTarget>::Error: core::fmt::Debug,
 {
@@ -252,6 +284,20 @@ where
         }
         None => "...",
     };
+
+    // Render background plate
+    Image::new(
+        &bg.sub_image(&Rectangle {
+            top_left: pos,
+            size: Size {
+                width: 71,
+                height: 26,
+            },
+        }),
+        pos,
+    )
+    .draw(display)
+    .unwrap();
 
     font.render_aligned(
         content,

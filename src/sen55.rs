@@ -162,11 +162,13 @@ pub async fn worker(i2c: I2c<'static, I2C1, Blocking>) {
             }
         };
 
+        info!("New readings available");
+
         // Push the new readings into the rolling averages.
-        avg_pm1.push(measurement.pm1_0);
-        avg_pm2_5.push(measurement.pm2_5);
-        avg_pm4.push(measurement.pm4_0);
-        avg_pm10.push(measurement.pm10_0);
+        avg_pm1.push(measurement.pm1_0 * 10_f32);
+        avg_pm2_5.push(measurement.pm2_5 * 10_f32);
+        avg_pm4.push(measurement.pm4_0 * 10_f32);
+        avg_pm10.push(measurement.pm10_0 * 10_f32);
         avg_voc.push(measurement.voc_index);
         avg_nox.push(measurement.nox_index);
         avg_temp.push(measurement.temperature);
@@ -244,7 +246,7 @@ async fn init_and_start_readings(
     }
 
     info!("Waiting for sensor to settle");
-    Timer::after_secs(10).await;
+    Timer::after_secs(5).await;
 
     Ok(())
 }
