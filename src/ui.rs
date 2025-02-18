@@ -257,11 +257,11 @@ fn draw_reading<D>(
 
     // Differente decimal places based on the value, so its always fewer than 4 characters
     let content = match value {
-        Some(v) if *v > 100.0 => {
+        Some(v) if *v >= 100.0 => {
             write!(&mut buf, "{:.0}", v).unwrap();
             buf.as_str()
         }
-        Some(v) if *v > 10.0 => {
+        Some(v) if *v >= 10.0 => {
             write!(&mut buf, "{:.1}", v).unwrap();
             buf.as_str()
         }
