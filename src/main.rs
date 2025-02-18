@@ -2,11 +2,13 @@
 #![no_main]
 #![allow(async_fn_in_trait)]
 
+use core::panic::PanicInfo;
+
 use cortex_m::delay::Delay;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
 
-use defmt::{error, info, warn};
+use defmt::{error, flush, info, warn};
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_time::{Duration, Timer, WithTimeout};
@@ -23,7 +25,7 @@ use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi::{self, Spi};
 use ui::{ConnectionStage, UiController};
 
-use {defmt_rtt as _, panic_probe as _};
+use defmt_rtt as _;
 
 use sen55::Readings;
 use st7789v2_driver::ST7789V2;
@@ -54,6 +56,15 @@ static MQTT_READING_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, 
 // Create channel for the sensor readings to be sent to the UI
 static UI_READING_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, Readings, 10> =
     embassy_sync::channel::Channel::new();
+
+#[panic_handler]
+fn panic_handler(info: &PanicInfo) -> ! {
+    error!("{}", info);
+    flush();
+
+    // Reset the board
+    cortex_m::peripheral::SCB::sys_reset();
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -94,7 +105,7 @@ async fn main(spawner: Spawner) {
     let display_dc = Output::new(p.PIN_16, Level::Low); // GP16 -> DC
     let display_rst = Output::new(p.PIN_21, Level::Low); // GP21 -> RST
     let display_cs = Output::new(p.PIN_17, Level::High); // GP17 -> CS (assuming we only have one thing on the bus)
-    let _display_bl = Output::new(p.PIN_22, Level::High); // GP22 -> BL (backlight, always on for now)
+    let mut display_bl = Output::new(p.PIN_22, Level::Low); // GP22 -> BL
 
     let display_spi = Spi::new_blocking_txonly(p.SPI0, display_clk, display_mosi, display_spi_cfg);
 
@@ -122,6 +133,8 @@ async fn main(spawner: Spawner) {
     display.init().await;
 
     display.render_startup();
+
+    display_bl.set_high();
 
     Timer::after_secs(3).await;
 
@@ -258,9 +271,7 @@ async fn wait_for_network(
         retries -= 1;
 
         if retries == 0 {
-            error!("DHCP failed to come up within 30 seconds, giving up and resetting");
-            // Reset the board
-            cortex_m::peripheral::SCB::sys_reset();
+            panic!("DHCP failed to come up within 30 seconds, giving up and resetting");
         }
     }
 

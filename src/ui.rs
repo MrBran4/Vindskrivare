@@ -19,7 +19,7 @@ use u8g2_fonts::FontRenderer;
 use crate::sen55::{Health, Readings};
 use crate::{DelayWrapper, UI_READING_CHANNEL};
 
-use {defmt_rtt as _, panic_probe as _};
+use defmt_rtt as _;
 
 use st7789v2_driver::{FrameBuffer, Region, ST7789V2};
 

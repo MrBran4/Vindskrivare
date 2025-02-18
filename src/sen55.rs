@@ -162,8 +162,6 @@ pub async fn worker(i2c: I2c<'static, I2C1, Blocking>) {
             }
         };
 
-        info!("New readings available");
-
         // Push the new readings into the rolling averages.
         avg_pm1.push(measurement.pm1_0 * 10_f32);
         avg_pm2_5.push(measurement.pm2_5 * 10_f32);
