@@ -230,13 +230,13 @@ impl UiController {
 
         // Draw the readings
         draw_reading(&mut self.display, bg, PM1_POS, &readings.pm1_0);
-        draw_reading(&mut self.display, bg, PM25_POS, &readings.pm2_5);
-        draw_reading(&mut self.display, bg, PM4_POS, &readings.pm4_0);
-        draw_reading(&mut self.display, bg, PM10_POS, &readings.pm10_0);
         draw_reading(&mut self.display, bg, TVOC_POS, &readings.voc_index);
-        draw_reading(&mut self.display, bg, TNOX_POS, &readings.nox_index);
-        draw_reading(&mut self.display, bg, TEMP_POS, &readings.temperature);
+        draw_reading(&mut self.display, bg, PM10_POS, &readings.pm10_0);
         draw_reading(&mut self.display, bg, HMTY_POS, &readings.humidity);
+        draw_reading(&mut self.display, bg, PM25_POS, &readings.pm2_5);
+        draw_reading(&mut self.display, bg, TNOX_POS, &readings.nox_index);
+        draw_reading(&mut self.display, bg, PM4_POS, &readings.pm4_0);
+        draw_reading(&mut self.display, bg, TEMP_POS, &readings.temperature);
 
         self.last_health = Some(new_health);
     }
