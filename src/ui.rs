@@ -28,15 +28,16 @@ pub type Display =
 
 const DISPLAY_W: u32 = 240;
 const DISPLAY_H: u32 = 280;
-const CLEAR_STRIP_W: u32 = 71;
+const READING_WIDTH: u32 = 70;
+const READING_HEIGHT: u32 = 24;
 
-const READING_SEP: i32 = 60;
-const FIRST_READING_Y: i32 = 37;
+const READING_SEP: i32 = 66;
+const FIRST_READING_Y: i32 = 28;
 
-const PM1_POS: Point = reading_pos(63, 0);
-const PM25_POS: Point = reading_pos(63, 1);
-const PM4_POS: Point = reading_pos(63, 2);
-const PM10_POS: Point = reading_pos(63, 3);
+const PM1_POS: Point = reading_pos(60, 0);
+const PM25_POS: Point = reading_pos(60, 1);
+const PM4_POS: Point = reading_pos(60, 2);
+const PM10_POS: Point = reading_pos(60, 3);
 
 const TVOC_POS: Point = reading_pos(168, 0);
 const TNOX_POS: Point = reading_pos(168, 1);
@@ -51,93 +52,79 @@ const READING_REGIONS: [Region; 8] = [
     Region {
         x: PM1_POS.x as u16,
         y: PM1_POS.y as u16,
-        width: CLEAR_STRIP_W,
-        height: 24,
+        width: READING_WIDTH,
+        height: READING_HEIGHT,
     },
     Region {
         x: PM25_POS.x as u16,
         y: PM25_POS.y as u16,
-        width: CLEAR_STRIP_W,
-        height: 24,
+        width: READING_WIDTH,
+        height: READING_HEIGHT,
     },
     Region {
         x: PM4_POS.x as u16,
         y: PM4_POS.y as u16,
-        width: CLEAR_STRIP_W,
-        height: 24,
+        width: READING_WIDTH,
+        height: READING_HEIGHT,
     },
     Region {
         x: PM10_POS.x as u16,
         y: PM10_POS.y as u16,
-        width: CLEAR_STRIP_W,
-        height: 24,
+        width: READING_WIDTH,
+        height: READING_HEIGHT,
     },
     Region {
         x: TVOC_POS.x as u16,
         y: TVOC_POS.y as u16,
-        width: CLEAR_STRIP_W,
-        height: 24,
+        width: READING_WIDTH,
+        height: READING_HEIGHT,
     },
     Region {
         x: TNOX_POS.x as u16,
         y: TNOX_POS.y as u16,
-        width: CLEAR_STRIP_W,
-        height: 24,
+        width: READING_WIDTH,
+        height: READING_HEIGHT,
     },
     Region {
         x: TEMP_POS.x as u16,
         y: TEMP_POS.y as u16,
-        width: CLEAR_STRIP_W,
-        height: 24,
+        width: READING_WIDTH,
+        height: READING_HEIGHT,
     },
     Region {
         x: HMTY_POS.x as u16,
         y: HMTY_POS.y as u16,
-        width: CLEAR_STRIP_W,
-        height: 24,
+        width: READING_WIDTH,
+        height: READING_HEIGHT,
     },
 ];
 
 const RAW_BG_STARTUP: ImageRawLE<'static, Rgb565> =
-    ImageRawLE::new(include_bytes!("../ui/raw/startup.rgb565"), DISPLAY_W);
+    ImageRawLE::new(include_bytes!("../ui/raw/bg-startup.bin"), DISPLAY_W);
 
-const RAW_CONNECTING_WIFI: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/connecting-wifi.rgb565"),
-    DISPLAY_W,
-);
+const RAW_CONNECTING_WIFI: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/connect-wifi.bin"), DISPLAY_W);
 
-const RAW_CONNECTING_DHCP: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/connecting-dhcp.rgb565"),
-    DISPLAY_W,
-);
+const RAW_CONNECTING_DHCP: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/connect-dhcp.bin"), DISPLAY_W);
 
-const RAW_CONNECTING_MQTT: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/connecting-mqtt.rgb565"),
-    DISPLAY_W,
-);
+const RAW_CONNECTING_MQTT: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/connect-mqtt.bin"), DISPLAY_W);
 
-const RAW_CONNECTING_SEN55: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/connecting-sen55.rgb565"),
-    DISPLAY_W,
-);
+const RAW_CONNECTING_SEN55: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/connect-sen55.bin"), DISPLAY_W);
 
-const RAW_CONNECTING_READY: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/connecting-ready.rgb565"),
-    DISPLAY_W,
-);
+const RAW_CONNECTING_READY: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/connect-ready.bin"), DISPLAY_W);
 
-const RAW_BG_READINGS_OK: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/readings-default.rgb565"),
-    DISPLAY_W,
-);
+const RAW_BG_READINGS_OK: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/readings-default.bin"), DISPLAY_W);
 
-const RAW_BG_READINGS_UNHAPPY: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/readings-unhappy.rgb565"),
-    DISPLAY_W,
-);
+const RAW_BG_READINGS_UNHAPPY: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/readings-unhappy.bin"), DISPLAY_W);
 
 const RAW_BG_READINGS_DANGEROUS: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/readings-dangerous.rgb565"),
+    include_bytes!("../ui/raw/readings-dangerous.bin"),
     DISPLAY_W,
 );
 

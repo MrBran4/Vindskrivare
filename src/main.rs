@@ -6,7 +6,7 @@ use cortex_m::delay::Delay;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
 
-use defmt::{info, warn};
+use defmt::{error, info, warn};
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_time::{Duration, Timer, WithTimeout};
@@ -258,7 +258,9 @@ async fn wait_for_network(
         retries -= 1;
 
         if retries == 0 {
-            panic!("DHCP failed to come up within 30 seconds, giving up and resetting");
+            error!("DHCP failed to come up within 30 seconds, giving up and resetting");
+            // Reset the board
+            cortex_m::peripheral::SCB::sys_reset();
         }
     }
 
