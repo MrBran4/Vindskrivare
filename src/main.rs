@@ -4,25 +4,31 @@
 
 use core::panic::PanicInfo;
 
+use cortex_m::delay::Delay;
 use cyw43::JoinOptions;
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
 
+use defmt::{error, flush, info, warn};
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_time::{Duration, Timer, WithTimeout};
-use log::{error, info, warn};
+use embedded_hal_1::delay::DelayNs;
 use rand::RngCore;
 
 use embassy_net::{Config, StackResources};
 use embassy_rp::bind_interrupts;
-use embassy_rp::clocks::RoscRng;
+use embassy_rp::clocks::{clk_sys_freq, RoscRng};
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c::InterruptHandler as I2cInterruptHandler;
-use embassy_rp::peripherals::{DMA_CH0, I2C1, PIO0, USB};
+use embassy_rp::peripherals::{DMA_CH0, I2C0, I2C1, PIO0, PIO1};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_rp::usb::{Driver, InterruptHandler as UsbInterruptHandler};
+use embassy_rp::spi::{self, Spi};
+use ui::{ConnectionStage, UiController};
+
+use defmt_rtt as _;
 
 use sen55::Readings;
+use st7789v2_driver::ST7789V2;
 use static_cell::StaticCell;
 
 mod avg;
@@ -30,11 +36,13 @@ mod config;
 mod hass;
 mod mqtt;
 mod sen55;
+mod ui;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
-    USBCTRL_IRQ => UsbInterruptHandler<USB>;
+    PIO1_IRQ_0 => InterruptHandler<PIO1>;
     I2C1_IRQ => I2cInterruptHandler<I2C1>;
+    I2C0_IRQ => I2cInterruptHandler<I2C0>;
 });
 
 static MQTT_RX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
@@ -42,32 +50,34 @@ static MQTT_TX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
 static MQTT_WORKING_BUFFER: StaticCell<[u8; 8192]> = StaticCell::new();
 
 // Create channel for the sensor readings to be sent to the MQTT worker
-static SHARED_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, Readings, 10> =
+static MQTT_READING_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, Readings, 10> =
+    embassy_sync::channel::Channel::new();
+
+// Create channel for the sensor readings to be sent to the UI
+static UI_READING_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, Readings, 10> =
     embassy_sync::channel::Channel::new();
 
 #[panic_handler]
-fn handle_panic(info: &PanicInfo) -> ! {
-    // This probably won't get written because the logger is its own task, and we're about to reset.
-    error!("Panicking: {}", info);
+fn panic_handler(info: &PanicInfo) -> ! {
+    error!("{}", info);
+    flush();
 
-    // Not with a bang, but with a whimper.
+    // Reset the board
     cortex_m::peripheral::SCB::sys_reset();
 }
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // General setup
     let p = embassy_rp::init(Default::default());
+    let core = cortex_m::Peripherals::take().unwrap();
+
     let mut rng = RoscRng;
 
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
-    let driver = Driver::new(p.USB, Irqs);
-    spawner.spawn(logger_task(driver)).unwrap();
-
-    // Wait for USB serial to be ready (or for the other end to start listening, not sure, just know it's needed)
-    Timer::after_secs(4).await;
-    info!("USB serial logging up");
+    info!("Hello world!");
 
     // Grab pins for the i2c to the SEN55 sensor.
     // Note Pin 6 on the sensor is not connected (even to ground).
@@ -84,7 +94,52 @@ async fn main(spawner: Spawner) {
         embassy_rp::i2c::Config::default(),
     );
 
-    // Grab pins for the CYW43
+    let mut display_spi_cfg = spi::Config::default();
+    display_spi_cfg.frequency = 64_000_000_u32; // 64 MHz
+    display_spi_cfg.phase = spi::Phase::CaptureOnSecondTransition;
+    display_spi_cfg.polarity = spi::Polarity::IdleHigh;
+
+    // Display pins
+    let display_clk = p.PIN_18; // GP18 -> CLK
+    let display_mosi = p.PIN_19; // GP19 -> DIN
+    let display_dc = Output::new(p.PIN_16, Level::Low); // GP16 -> DC
+    let display_rst = Output::new(p.PIN_21, Level::Low); // GP21 -> RST
+    let display_cs = Output::new(p.PIN_17, Level::High); // GP17 -> CS (assuming we only have one thing on the bus)
+    let mut display_bl = Output::new(p.PIN_22, Level::Low); // GP22 -> BL
+
+    let display_spi = Spi::new_blocking_txonly(p.SPI0, display_clk, display_mosi, display_spi_cfg);
+
+    let screen_direction = st7789v2_driver::VERTICAL;
+    let lcd_width = 240_u32;
+    let lcd_height = 280_u32;
+    // Initialize the display
+    let display: ui::Display = ST7789V2::new(
+        display_spi,
+        display_dc,
+        display_cs,
+        display_rst,
+        true, // 'is it rgb?' (yes)
+        screen_direction,
+        lcd_width,
+        lcd_height,
+    );
+
+    // Set up the delay for the first core
+    let delay_wrapper = DelayWrapper::new(Delay::new(core.SYST, clk_sys_freq()));
+
+    // Hand off display to the UI module
+    let mut display = ui::UiController::new(display, delay_wrapper);
+
+    display.init().await;
+
+    display.render_startup();
+
+    display_bl.set_high();
+
+    Timer::after_secs(3).await;
+
+    // Grab pins for the CYW43 (wifi chip); set up SPI to it.
+    // Wifi chip is integrated into the pico and we use PIO to drive SPI to it.
     let pwr = Output::new(p.PIN_23, Level::Low);
     let cs = Output::new(p.PIN_25, Level::High);
     let mut pio = Pio::new(p.PIO0, Irqs);
@@ -99,7 +154,7 @@ async fn main(spawner: Spawner) {
         p.DMA_CH0,
     );
 
-    // Start the CYW43 driver (the wifi chip)
+    // Start the CYW43 driver
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
     let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
@@ -114,7 +169,7 @@ async fn main(spawner: Spawner) {
 
     let config = Config::dhcpv4(Default::default());
 
-    // Generate random seed
+    // Generate random seed super securely
     let seed = rng.next_u64();
 
     // Init network stack
@@ -132,7 +187,7 @@ async fn main(spawner: Spawner) {
         .expect("couldn't spawn net task");
 
     // Wait for the network to be connected
-    wait_for_network(&mut control, &stack).await;
+    wait_for_network(&mut control, &stack, &mut display).await;
 
     let mqtt_rx_buffer = MQTT_RX_BUFFER.init([0u8; 4096]);
     let mqtt_tx_buffer = MQTT_TX_BUFFER.init([0u8; 4096]);
@@ -146,21 +201,23 @@ async fn main(spawner: Spawner) {
         ))
         .expect("Couldn't spawn mqtt task");
 
+    display.render_connecting(ConnectionStage::Mqtt);
+
     spawner
         .spawn(sen55::worker(i2c))
         .expect("Couldn't spawn sen55 task");
+
+    display.render_connecting(ConnectionStage::Ready);
+
+    spawner
+        .spawn(ui::worker(display))
+        .expect("Couldn't spawn ui task");
 
     loop {
         info!("Main loop");
 
         Timer::after(Duration::from_secs(60)).await;
     }
-}
-
-/// Pipes log messages over USB serial back to whatever host just flashed us.
-#[embassy_executor::task]
-async fn logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }
 
 /// Pokes the CYW43 driver to do hardware network stuff.
@@ -178,8 +235,13 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
 }
 
 /// Wait (possibly forever) for the network to be connected.
-async fn wait_for_network(control: &mut cyw43::Control<'_>, stack: &embassy_net::Stack<'_>) {
+async fn wait_for_network(
+    control: &mut cyw43::Control<'_>,
+    stack: &embassy_net::Stack<'_>,
+    display: &mut UiController,
+) {
     info!("Waiting for link up...");
+    display.render_connecting(ConnectionStage::Wifi);
 
     loop {
         match control
@@ -192,22 +254,38 @@ async fn wait_for_network(control: &mut cyw43::Control<'_>, stack: &embassy_net:
         {
             Ok(_) => break,
             Err(err) => {
-                warn!("wifi join failed with status: {err:?}");
+                warn!("wifi join failed with status: {}", err);
             }
         }
     }
 
+    display.render_connecting(ConnectionStage::Dhcp);
+
     // Wait for DHCP, not necessary when using static IP
     info!("Waiting for DHCP...");
+    let mut retries = 60;
     while !stack.is_config_up() {
-        Timer::after_millis(100).await;
-        warn!("DHCP not up yet")
+        Timer::after_millis(500).await;
+        warn!("DHCP not up yet");
+
+        retries -= 1;
+
+        if retries == 0 {
+            panic!("DHCP failed to come up within 30 seconds, giving up and resetting");
+        }
     }
 
     info!("Waiting for link up...");
+    let mut retries = 120;
     while !stack.is_link_up() {
         Timer::after_millis(500).await;
-        warn!("Link not up yet")
+        warn!("Link not up yet");
+
+        retries -= 1;
+
+        if retries == 0 {
+            panic!("Link layer failed to come up within 30 seconds, giving up and resetting");
+        }
     }
     info!("Link up!");
 
@@ -222,4 +300,21 @@ async fn wait_for_network(control: &mut cyw43::Control<'_>, stack: &embassy_net:
     stack.wait_config_up().await;
 
     info!("Stack up!");
+}
+
+pub struct DelayWrapper {
+    delay: Delay,
+}
+
+impl DelayWrapper {
+    pub fn new(delay: Delay) -> Self {
+        DelayWrapper { delay }
+    }
+}
+
+impl DelayNs for DelayWrapper {
+    fn delay_ns(&mut self, ns: u32) {
+        let us = (ns + 999) / 1000; // Convert nanoseconds to microseconds
+        self.delay.delay_us(us); // Use microsecond delay
+    }
 }

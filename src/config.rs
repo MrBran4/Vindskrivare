@@ -14,12 +14,8 @@ pub const MQTT_TOPIC_DICSOVERY: &str = concat!(
     "/config"
 );
 
-pub const MQTT_TOPIC_STATE: &str = concat!(
-    env!("MQTT_HASS_DISCOVERY_BASE"),
-    "/sensor/",
-    env!("HASS_DEVICE_IDENTIFIER"),
-    "/state"
-);
+pub const MQTT_TOPIC_STATE: &str =
+    concat!("/vindskrivare/", env!("HASS_DEVICE_IDENTIFIER"), "/state");
 
 pub const HASS_DEVICE_IDENTIFIER: &str = env!("HASS_DEVICE_IDENTIFIER");
 pub const HASS_DEVICE_NAME: &str = env!("HASS_DEVICE_NAME");

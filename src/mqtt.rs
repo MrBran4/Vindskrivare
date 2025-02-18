@@ -7,7 +7,7 @@ use rust_mqtt::{
     utils::rng_generator::CountingRng,
 };
 
-use crate::{config, hass, SHARED_CHANNEL};
+use crate::{config, hass, MQTT_READING_CHANNEL};
 
 /// Publishes updated readings to the MQTT broker, including the initial hass discovery message.
 #[embassy_executor::task]
@@ -121,7 +121,7 @@ pub async fn worker(
 
         loop {
             // Would be reading from the sensor channel here, for now just send a dummy message.
-            let readings = SHARED_CHANNEL.receive().await;
+            let readings = MQTT_READING_CHANNEL.receive().await;
 
             let state_payload_len =
                 match serde_json_core::to_slice(&hass::StateMessage::from(readings), work_buffer) {
