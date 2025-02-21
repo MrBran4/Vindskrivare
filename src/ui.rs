@@ -57,10 +57,10 @@ const fn graph_pos(x: i32, index: u32) -> Point {
     Point::new(x, FIRST_GRAPH_Y + (GRAPH_SEP * index as i32))
 }
 
-const GRAPH_1_POS: Point = graph_pos(60, 0);
-const GRAPH_2_POS: Point = graph_pos(60, 1);
-const GRAPH_3_POS: Point = graph_pos(60, 2);
-const GRAPH_4_POS: Point = graph_pos(60, 3);
+const GRAPH_1_POS: Point = graph_pos(70, 0);
+const GRAPH_2_POS: Point = graph_pos(70, 1);
+const GRAPH_3_POS: Point = graph_pos(70, 2);
+const GRAPH_4_POS: Point = graph_pos(70, 3);
 
 const RAW_BG_STARTUP: ImageRawLE<'static, Rgb565> =
     ImageRawLE::new(include_bytes!("../ui/raw/bg-startup.bin"), DISPLAY_W);
@@ -105,6 +105,8 @@ pub struct UiController {
 
     // History of readings for graphing
     history: HistoricReadings,
+
+    frame_buffer_raw: [u8; 240 * 280 * 2],
 }
 
 pub enum ConnectionStage {
@@ -120,6 +122,7 @@ impl UiController {
             delay,
             last_health: None,
             history: HistoricReadings::new(),
+            frame_buffer_raw: [0; 240 * 280 * 2],
         }
     }
 
@@ -156,12 +159,14 @@ impl UiController {
             Health::Dangerous => &RAW_BG_READINGS_DANGEROUS,
         };
 
-        let mut this_frame_raw = [0; 240 * 280 * 2];
-        let mut this_frame_buffer = FrameBuffer::new(&mut this_frame_raw, DISPLAY_W, DISPLAY_H);
+        let mut this_frame_buffer =
+            FrameBuffer::new(&mut self.frame_buffer_raw, DISPLAY_W, DISPLAY_H);
 
         // Draw the background straight into the temporary framebuffer (so it's behind the readings we're about to redraw)
         let img = Image::new(bg, Point::zero());
-        bg.draw(&mut this_frame_buffer).unwrap();
+        if let Err(e) = bg.draw(&mut this_frame_buffer) {
+            info!("Error drawing background: {}", e);
+        }
 
         match (&self.last_health, first_of_cycle) {
             (_, true) => {
@@ -180,9 +185,6 @@ impl UiController {
                 // No change in health, nothing to be done
             }
         }
-
-        // Debug: Ignore everything after this to figure out why it's never returning
-        return;
 
         // Draw the readings
         draw_reading(&mut self.display, bg, PM1_POS, &readings.pm1_0);
@@ -207,8 +209,8 @@ impl UiController {
             Health::Dangerous => &RAW_BG_GRAPHS_DANGEROUS,
         };
 
-        let mut this_frame_raw = [0; 240 * 280 * 2];
-        let mut this_frame_buffer = FrameBuffer::new(&mut this_frame_raw, DISPLAY_W, DISPLAY_H);
+        let mut this_frame_buffer =
+            FrameBuffer::new(&mut self.frame_buffer_raw, DISPLAY_W, DISPLAY_H);
 
         // Draw the background straight into the temporary framebuffer (so it's behind the readings we're about to redraw)
         let img = Image::new(bg, Point::zero());
@@ -262,6 +264,15 @@ fn draw_reading<D>(
             buf.as_str()
         }
         v if *v >= 10.0 => {
+            write!(&mut buf, "{:.1}", v).unwrap();
+            buf.as_str()
+        }
+        v if *v == 0.0 => "0",
+        v if *v <= 10.0 => {
+            write!(&mut buf, "{:.0}", v).unwrap();
+            buf.as_str()
+        }
+        v if *v < 0.0 => {
             write!(&mut buf, "{:.1}", v).unwrap();
             buf.as_str()
         }
@@ -321,10 +332,27 @@ fn draw_graph<D>(
     .draw(display)
     .unwrap();
 
+    let graph_scale_min = readings
+        .iter()
+        .map(|el| (*el * 1000_f32) as i32)
+        .min()
+        .unwrap_or(0)
+        / 1000;
+
+    let graph_scale_max = readings
+        .iter()
+        .map(|el| (*el * 1000_f32) as i32)
+        .max()
+        .unwrap_or(0)
+        / 1000;
+
     // Render the graph, right to left.
     readings.iter().enumerate().for_each(|(idx, reading)| {
         let x = pos.x + GRAPH_WIDTH as i32 - idx as i32 - 1;
-        let y = pos.y + GRAPH_HEIGHT as i32 - (reading * GRAPH_HEIGHT as f32) as i32 - 1;
+        let y = pos.y + GRAPH_HEIGHT as i32
+            - 1
+            - (((*reading * 1000_f32) as i32 - graph_scale_min) * GRAPH_HEIGHT as i32)
+                / (graph_scale_max - graph_scale_min);
 
         Rectangle::new(Point::new(x, y), Size::new(1, 1))
             .draw_styled(&GRAPH_STYLE, display)
@@ -359,7 +387,7 @@ pub async fn worker(mut ui: UiController) {
         match reading_idx {
             x @ 0..=25 if x % 5 == 0 => {
                 info!("In range 0..=25 and %5");
-                //ui.render_readings_page(&readings, reading_idx == 0);
+                ui.render_readings_page(&readings, reading_idx == 0);
             }
             x @ 26..=50 if x % 3 == 0 => {
                 info!("In range 26..=50 and %3");
