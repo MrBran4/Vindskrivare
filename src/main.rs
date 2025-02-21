@@ -25,7 +25,7 @@ use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_rp::spi::{self, Spi};
 use ui::{ConnectionStage, UiController};
 
-use panic_probe as _;
+// use panic_probe as _;
 
 use defmt_rtt as _;
 
@@ -59,14 +59,13 @@ static MQTT_READING_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, 
 static UI_READING_CHANNEL: embassy_sync::channel::Channel<ThreadModeRawMutex, Readings, 10> =
     embassy_sync::channel::Channel::new();
 
-// #[panic_handler]
-// fn panic_handler(info: &PanicInfo) -> ! {
-//     error!("{}", info);
-//     flush();
-//
-//     // Reset the board
-//     cortex_m::peripheral::SCB::sys_reset();
-// }
+#[panic_handler]
+fn panic_handler(info: &PanicInfo) -> ! {
+    error!("{}", info);
+    flush();
+    // Reset the board
+    cortex_m::peripheral::SCB::sys_reset();
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {

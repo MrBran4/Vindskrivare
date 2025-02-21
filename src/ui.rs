@@ -3,7 +3,7 @@ use core::mem::discriminant;
 
 use defmt::info;
 use embassy_time::Timer;
-use embedded_graphics::image::{ImageDrawable, ImageDrawableExt, ImageRaw};
+use embedded_graphics::image::{ImageDrawableExt, ImageRaw};
 use embedded_graphics::pixelcolor::raw::LittleEndian;
 use embedded_graphics::prelude::{DrawTarget, IntoStorage, Point, RgbColor, Size};
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, StyledDrawable};
@@ -21,13 +21,12 @@ use crate::{DelayWrapper, UI_READING_CHANNEL};
 
 use defmt_rtt as _;
 
-use st7789v2_driver::{FrameBuffer, ST7789V2};
+use st7789v2_driver::ST7789V2;
 
 pub type Display =
     ST7789V2<Spi<'static, SPI0, Blocking>, Output<'static>, Output<'static>, Output<'static>>;
 
 const DISPLAY_W: u32 = 240;
-const DISPLAY_H: u32 = 280;
 
 const READING_WIDTH: u32 = 71;
 const READING_HEIGHT: u32 = 26;
@@ -57,10 +56,10 @@ const fn graph_pos(x: i32, index: u32) -> Point {
     Point::new(x, FIRST_GRAPH_Y + (GRAPH_SEP * index as i32))
 }
 
-const GRAPH_1_POS: Point = graph_pos(70, 0);
-const GRAPH_2_POS: Point = graph_pos(70, 1);
-const GRAPH_3_POS: Point = graph_pos(70, 2);
-const GRAPH_4_POS: Point = graph_pos(70, 3);
+const GRAPH_1_POS: Point = graph_pos(66, 0);
+const GRAPH_2_POS: Point = graph_pos(66, 1);
+const GRAPH_3_POS: Point = graph_pos(66, 2);
+const GRAPH_4_POS: Point = graph_pos(66, 3);
 
 const RAW_BG_STARTUP: ImageRawLE<'static, Rgb565> =
     ImageRawLE::new(include_bytes!("../ui/raw/bg-startup.bin"), DISPLAY_W);
@@ -105,8 +104,6 @@ pub struct UiController {
 
     // History of readings for graphing
     history: HistoricReadings,
-
-    frame_buffer_raw: [u8; 240 * 280 * 2],
 }
 
 pub enum ConnectionStage {
@@ -122,7 +119,6 @@ impl UiController {
             delay,
             last_health: None,
             history: HistoricReadings::new(),
-            frame_buffer_raw: [0; 240 * 280 * 2],
         }
     }
 
@@ -159,14 +155,8 @@ impl UiController {
             Health::Dangerous => &RAW_BG_READINGS_DANGEROUS,
         };
 
-        let mut this_frame_buffer =
-            FrameBuffer::new(&mut self.frame_buffer_raw, DISPLAY_W, DISPLAY_H);
-
         // Draw the background straight into the temporary framebuffer (so it's behind the readings we're about to redraw)
         let img = Image::new(bg, Point::zero());
-        if let Err(e) = bg.draw(&mut this_frame_buffer) {
-            info!("Error drawing background: {}", e);
-        }
 
         match (&self.last_health, first_of_cycle) {
             (_, true) => {
@@ -209,12 +199,8 @@ impl UiController {
             Health::Dangerous => &RAW_BG_GRAPHS_DANGEROUS,
         };
 
-        let mut this_frame_buffer =
-            FrameBuffer::new(&mut self.frame_buffer_raw, DISPLAY_W, DISPLAY_H);
-
         // Draw the background straight into the temporary framebuffer (so it's behind the readings we're about to redraw)
         let img = Image::new(bg, Point::zero());
-        bg.draw(&mut this_frame_buffer).unwrap();
 
         match (&self.last_health, first_of_cycle) {
             (_, true) => {
@@ -268,7 +254,7 @@ fn draw_reading<D>(
             buf.as_str()
         }
         v if *v == 0.0 => "0",
-        v if *v <= 10.0 => {
+        v if *v <= -10.0 => {
             write!(&mut buf, "{:.0}", v).unwrap();
             buf.as_str()
         }
@@ -332,27 +318,32 @@ fn draw_graph<D>(
     .draw(display)
     .unwrap();
 
+    // Do the math as i32 at 1000x scale to avoid many conversions
     let graph_scale_min = readings
         .iter()
         .map(|el| (*el * 1000_f32) as i32)
         .min()
-        .unwrap_or(0)
-        / 1000;
+        .unwrap_or(0);
 
     let graph_scale_max = readings
         .iter()
         .map(|el| (*el * 1000_f32) as i32)
         .max()
-        .unwrap_or(0)
-        / 1000;
+        .unwrap_or(0);
+
+    let mut graph_range = graph_scale_max - graph_scale_min;
+    if graph_range == 0 {
+        graph_range = 1;
+    }
+
+    let graph_bottom = pos.y + GRAPH_HEIGHT as i32 - 1;
 
     // Render the graph, right to left.
     readings.iter().enumerate().for_each(|(idx, reading)| {
         let x = pos.x + GRAPH_WIDTH as i32 - idx as i32 - 1;
-        let y = pos.y + GRAPH_HEIGHT as i32
-            - 1
-            - (((*reading * 1000_f32) as i32 - graph_scale_min) * GRAPH_HEIGHT as i32)
-                / (graph_scale_max - graph_scale_min);
+        let val = (*reading * 1000_f32) as i32;
+
+        let y = graph_bottom - ((val / graph_range) * GRAPH_HEIGHT as i32) - 1;
 
         Rectangle::new(Point::new(x, y), Size::new(1, 1))
             .draw_styled(&GRAPH_STYLE, display)
@@ -389,9 +380,9 @@ pub async fn worker(mut ui: UiController) {
                 info!("In range 0..=25 and %5");
                 ui.render_readings_page(&readings, reading_idx == 0);
             }
-            x @ 26..=50 if x % 3 == 0 => {
+            x @ 26..=50 if x % 2 == 0 => {
                 info!("In range 26..=50 and %3");
-                ui.render_graphs_page(&readings, reading_idx == 27);
+                ui.render_graphs_page(&readings, reading_idx == 26);
             }
             _ => {
                 info!("No render");
