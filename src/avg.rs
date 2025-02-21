@@ -34,13 +34,18 @@ impl<const L: usize> Hysterysiser<L> {
         self.index = (self.index + 1) % L;
     }
 
-    /// Get the rolling average of the last L values, or
-    /// None if there aren't enough readings yet.
-    pub fn average(&self) -> Option<f32> {
+    /// Get the rolling average of the last L values, or of the available
+    /// values if we haven't filled the array yet.
+    pub fn average(&self) -> f32 {
         if !self.ready {
-            return None;
+            if self.index == 0 {
+                return 0.0; // No readings
+            }
+
+            // Calculate the average of the available values.
+            return self.sum as f32 / self.index as f32;
         }
 
-        Some(self.sum as f32 / L as f32)
+        self.sum as f32 / L as f32
     }
 }

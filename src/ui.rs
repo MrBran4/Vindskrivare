@@ -246,7 +246,7 @@ fn draw_reading<D>(
     display: &mut D,
     bg: &ImageRaw<'static, Rgb565, LittleEndian>,
     pos: Point,
-    value: &Option<f32>,
+    value: &f32,
 ) where
     D: DrawTarget<Color = Rgb565>,
     <D as DrawTarget>::Error: core::fmt::Debug,
@@ -257,19 +257,18 @@ fn draw_reading<D>(
 
     // Differente decimal places based on the value, so its always fewer than 4 characters
     let content = match value {
-        Some(v) if *v >= 100.0 => {
+        v if *v >= 100.0 => {
             write!(&mut buf, "{:.0}", v).unwrap();
             buf.as_str()
         }
-        Some(v) if *v >= 10.0 => {
+        v if *v >= 10.0 => {
             write!(&mut buf, "{:.1}", v).unwrap();
             buf.as_str()
         }
-        Some(v) => {
+        v => {
             write!(&mut buf, "{:.2}", v).unwrap();
             buf.as_str()
         }
-        None => "...",
     };
 
     // Render background plate

@@ -4,18 +4,17 @@ use embassy_rp::peripherals::I2C1;
 use embassy_time::{Delay, Timer};
 use sen5x_rs::Error;
 
-use crate::avg::Hysterysiser;
 use crate::{MQTT_READING_CHANNEL, UI_READING_CHANNEL};
 
 pub struct Readings {
-    pub pm1_0: Option<f32>,
-    pub pm2_5: Option<f32>,
-    pub pm4_0: Option<f32>,
-    pub pm10_0: Option<f32>,
-    pub voc_index: Option<f32>,
-    pub nox_index: Option<f32>,
-    pub temperature: Option<f32>,
-    pub humidity: Option<f32>,
+    pub pm1_0: f32,
+    pub pm2_5: f32,
+    pub pm4_0: f32,
+    pub pm10_0: f32,
+    pub voc_index: f32,
+    pub nox_index: f32,
+    pub temperature: f32,
+    pub humidity: f32,
 }
 
 /// A vague health indicator for the overall readings.
@@ -26,42 +25,26 @@ pub enum Health {
 }
 
 impl Readings {
-    pub fn has_all(&self) -> bool {
-        self.pm1_0.is_some()
-            && self.pm2_5.is_some()
-            && self.pm4_0.is_some()
-            && self.pm10_0.is_some()
-            && self.voc_index.is_some()
-            && self.nox_index.is_some()
-            && self.temperature.is_some()
-            && self.humidity.is_some()
-    }
-
     pub fn health(&self) -> Health {
-        // If any of the readings are None, we can't calculate the health.
-        if !self.has_all() {
-            return Health::Ok;
-        }
-
         // If any of the readings are above the threshold, we're in the danger zone.
         // unwrapping is safe because we've already checked that all the readings are Some.
-        if self.pm1_0.unwrap() > 100.0
-            || self.pm2_5.unwrap() > 100.0
-            || self.pm4_0.unwrap() > 100.0
-            || self.pm10_0.unwrap() > 100.0
-            || self.voc_index.unwrap() > 400.0
-            || self.nox_index.unwrap() > 5.0
+        if self.pm1_0 > 100.0
+            || self.pm2_5 > 100.0
+            || self.pm4_0 > 100.0
+            || self.pm10_0 > 100.0
+            || self.voc_index > 400.0
+            || self.nox_index > 5.0
         {
             return Health::Dangerous;
         }
 
         // Same thing but with warning thresholds.
-        if self.pm1_0.unwrap() > 25.0
-            || self.pm2_5.unwrap() > 25.0
-            || self.pm4_0.unwrap() > 25.0
-            || self.pm10_0.unwrap() > 25.0
-            || self.voc_index.unwrap() > 225.0
-            || self.nox_index.unwrap() > 2.5
+        if self.pm1_0 > 25.0
+            || self.pm2_5 > 25.0
+            || self.pm4_0 > 25.0
+            || self.pm10_0 > 25.0
+            || self.voc_index > 225.0
+            || self.nox_index > 2.5
         {
             return Health::Warning;
         }
@@ -88,21 +71,6 @@ pub async fn worker(i2c: I2c<'static, I2C1, Blocking>) {
         error!("couldn't init sensor, board will reset");
         panic!("couldn't init sensor");
     }
-
-    // Track the rolling averages of the last few readings to smooth out noise.
-    // pm1.0, pm2.5, pm4.0, pm10.0 can change rapidly so we average over fewer readings.
-    let mut avg_pm1 = Hysterysiser::<30>::new();
-    let mut avg_pm2_5 = Hysterysiser::<30>::new();
-    let mut avg_pm4 = Hysterysiser::<30>::new();
-    let mut avg_pm10 = Hysterysiser::<30>::new();
-
-    // tVOC and tNOx are slower to change so we average over more readings.
-    let mut avg_voc = Hysterysiser::<60>::new();
-    let mut avg_nox = Hysterysiser::<60>::new();
-
-    // Temperature and humidity are also slow to change.
-    let mut avg_temp = Hysterysiser::<90>::new();
-    let mut avg_humidity = Hysterysiser::<90>::new();
 
     let mut recent_read_failures = 0;
 
@@ -162,40 +130,30 @@ pub async fn worker(i2c: I2c<'static, I2C1, Blocking>) {
             }
         };
 
-        // Push the new readings into the rolling averages.
-        avg_pm1.push(measurement.pm1_0 * 10_f32);
-        avg_pm2_5.push(measurement.pm2_5 * 10_f32);
-        avg_pm4.push(measurement.pm4_0 * 10_f32);
-        avg_pm10.push(measurement.pm10_0 * 10_f32);
-        avg_voc.push(measurement.voc_index);
-        avg_nox.push(measurement.nox_index);
-        avg_temp.push(measurement.temperature);
-        avg_humidity.push(measurement.humidity);
-
         // Publish the rolling averages.
         MQTT_READING_CHANNEL
             .send(Readings {
-                pm1_0: avg_pm1.average(),
-                pm2_5: avg_pm2_5.average(),
-                pm4_0: avg_pm4.average(),
-                pm10_0: avg_pm10.average(),
-                voc_index: avg_voc.average(),
-                nox_index: avg_nox.average(),
-                temperature: avg_temp.average(),
-                humidity: avg_humidity.average(),
+                pm1_0: measurement.pm1_0 * 10_f32,
+                pm2_5: measurement.pm2_5 * 10_f32,
+                pm4_0: measurement.pm4_0 * 10_f32,
+                pm10_0: measurement.pm10_0 * 10_f32,
+                voc_index: measurement.voc_index,
+                nox_index: measurement.nox_index,
+                temperature: measurement.temperature,
+                humidity: measurement.humidity,
             })
             .await;
 
         if UI_READING_CHANNEL
             .try_send(Readings {
-                pm1_0: avg_pm1.average(),
-                pm2_5: avg_pm2_5.average(),
-                pm4_0: avg_pm4.average(),
-                pm10_0: avg_pm10.average(),
-                voc_index: avg_voc.average(),
-                nox_index: avg_nox.average(),
-                temperature: avg_temp.average(),
-                humidity: avg_humidity.average(),
+                pm1_0: measurement.pm1_0 * 10_f32,
+                pm2_5: measurement.pm2_5 * 10_f32,
+                pm4_0: measurement.pm4_0 * 10_f32,
+                pm10_0: measurement.pm10_0 * 10_f32,
+                voc_index: measurement.voc_index,
+                nox_index: measurement.nox_index,
+                temperature: measurement.temperature,
+                humidity: measurement.humidity,
             })
             .is_err()
         {

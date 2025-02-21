@@ -66,14 +66,14 @@ pub struct DiscoveryComponent<'a> {
 
 #[derive(Debug, Serialize)]
 pub struct StateMessage {
-    pub temperature: Option<f32>,
-    pub humidity: Option<f32>,
-    pub pm1: Option<f32>,
-    pub pm2_5: Option<f32>,
-    pub pm4: Option<f32>,
-    pub pm10: Option<f32>,
-    pub voc: Option<f32>,
-    pub nox: Option<f32>,
+    pub temperature: f32,
+    pub humidity: f32,
+    pub pm1: f32,
+    pub pm2_5: f32,
+    pub pm4: f32,
+    pub pm10: f32,
+    pub voc: f32,
+    pub nox: f32,
 }
 
 impl From<sen55::Readings> for StateMessage {

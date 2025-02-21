@@ -7,7 +7,7 @@ use rust_mqtt::{
     utils::rng_generator::CountingRng,
 };
 
-use crate::{config, hass, MQTT_READING_CHANNEL};
+use crate::{avg::Hysterysiser, config, hass, sen55::Readings, MQTT_READING_CHANNEL};
 
 /// Publishes updated readings to the MQTT broker, including the initial hass discovery message.
 #[embassy_executor::task]
@@ -18,6 +18,21 @@ pub async fn worker(
     work_buffer: &'static mut [u8],
 ) {
     info!("started mqtt worker");
+
+    // Track the rolling averages of the last few readings to smooth out noise.
+    // pm1.0, pm2.5, pm4.0, pm10.0 can change rapidly so we average over fewer readings.
+    let mut avg_pm1 = Hysterysiser::<30>::new();
+    let mut avg_pm2_5 = Hysterysiser::<30>::new();
+    let mut avg_pm4 = Hysterysiser::<30>::new();
+    let mut avg_pm10 = Hysterysiser::<30>::new();
+
+    // tVOC and tNOx are slower to change so we average over more readings.
+    let mut avg_voc = Hysterysiser::<60>::new();
+    let mut avg_nox = Hysterysiser::<60>::new();
+
+    // Temperature and humidity are also slow to change.
+    let mut avg_temp = Hysterysiser::<90>::new();
+    let mut avg_humidity = Hysterysiser::<90>::new();
 
     loop {
         Timer::after_millis(500).await;
@@ -123,14 +138,35 @@ pub async fn worker(
             // Would be reading from the sensor channel here, for now just send a dummy message.
             let readings = MQTT_READING_CHANNEL.receive().await;
 
-            let state_payload_len =
-                match serde_json_core::to_slice(&hass::StateMessage::from(readings), work_buffer) {
-                    Ok(serialized_len) => serialized_len,
-                    Err(e) => {
-                        error!("Error serializing state payload: {:?}", e);
-                        continue;
-                    }
-                };
+            // Push the new readings into the rolling averages.
+            avg_pm1.push(readings.pm1_0 * 10_f32);
+            avg_pm2_5.push(readings.pm2_5 * 10_f32);
+            avg_pm4.push(readings.pm4_0 * 10_f32);
+            avg_pm10.push(readings.pm10_0 * 10_f32);
+            avg_voc.push(readings.voc_index);
+            avg_nox.push(readings.nox_index);
+            avg_temp.push(readings.temperature);
+            avg_humidity.push(readings.humidity);
+
+            let state_payload_len = match serde_json_core::to_slice(
+                &hass::StateMessage::from(Readings {
+                    pm1_0: avg_pm1.average(),
+                    pm2_5: avg_pm2_5.average(),
+                    pm4_0: avg_pm4.average(),
+                    pm10_0: avg_pm10.average(),
+                    voc_index: avg_voc.average(),
+                    nox_index: avg_nox.average(),
+                    temperature: avg_temp.average(),
+                    humidity: avg_humidity.average(),
+                }),
+                work_buffer,
+            ) {
+                Ok(serialized_len) => serialized_len,
+                Err(e) => {
+                    error!("Error serializing state payload: {:?}", e);
+                    continue;
+                }
+            };
 
             match client
                 .send_message(
