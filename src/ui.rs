@@ -307,10 +307,10 @@ fn draw_graph<D>(
     // Render background plate
     Image::new(
         &bg.sub_image(&Rectangle {
-            top_left: pos,
+            top_left: Point::new(pos.x - 1, pos.y - 1),
             size: Size {
-                width: GRAPH_WIDTH,
-                height: GRAPH_HEIGHT,
+                width: GRAPH_WIDTH + 2,
+                height: GRAPH_HEIGHT + 2,
             },
         }),
         pos,
@@ -319,36 +319,46 @@ fn draw_graph<D>(
     .unwrap();
 
     // Do the math as i32 at 1000x scale to avoid many conversions
-    let graph_scale_min = readings
+    let mut graph_scale_min = readings
+        .history()
         .iter()
         .map(|el| (*el * 1000_f32) as i32)
         .min()
-        .unwrap_or(0);
+        .unwrap_or(0) as f32
+        / 1000_f32;
 
-    let graph_scale_max = readings
+    let mut graph_scale_max = readings
+        .history()
         .iter()
         .map(|el| (*el * 1000_f32) as i32)
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0) as f32
+        / 1000_f32;
 
-    let mut graph_range = graph_scale_max - graph_scale_min;
-    if graph_range == 0 {
-        graph_range = 1;
+    info!("Graph min is {}", graph_scale_min);
+    info!("Graph max is {}", graph_scale_max);
+
+    if graph_scale_min - graph_scale_max < 10.0 {
+        graph_scale_min -= 5.0;
+        graph_scale_max += 5.0;
     }
+
+    let graph_range = graph_scale_max - graph_scale_min;
 
     let graph_bottom = pos.y + GRAPH_HEIGHT as i32 - 1;
 
     // Render the graph, right to left.
-    readings.iter().enumerate().for_each(|(idx, reading)| {
-        let x = pos.x + GRAPH_WIDTH as i32 - idx as i32 - 1;
-        let val = (*reading * 1000_f32) as i32;
+    for idx in 0..readings.history().len() {
+        let val = *readings.history().get(idx).unwrap();
+        let scaled_val = val / graph_range * (GRAPH_HEIGHT as f32);
 
-        let y = graph_bottom - ((val / graph_range) * GRAPH_HEIGHT as i32) - 1;
+        let x = (pos.x + GRAPH_WIDTH as i32) - idx as i32 - 1;
+        let y = graph_bottom - scaled_val as i32;
 
         Rectangle::new(Point::new(x, y), Size::new(1, 1))
             .draw_styled(&GRAPH_STYLE, display)
             .unwrap()
-    });
+    }
 }
 
 /// Consumes a UiController and draws readings to it whenever
@@ -373,6 +383,9 @@ pub async fn worker(mut ui: UiController) {
         ui.history.humidity.push(readings.humidity);
 
         info!("Reading idx is {}", reading_idx);
+
+        ui.render_graphs_page(&readings, reading_idx == 26);
+        continue;
 
         // Render the right page (at the right rate)
         match reading_idx {
@@ -440,10 +453,17 @@ impl History {
         self.idx = (self.idx + 1) % GRAPH_WIDTH as usize;
     }
 
-    // Get an iterator over the readings, newest to oldest.
-    fn iter(&self) -> impl Iterator<Item = &f32> + '_ {
-        self.readings[self.idx..]
-            .iter()
-            .chain(self.readings[..self.idx].iter())
+    /// Return a slice of the history, newest to oldest.
+    fn history(&self) -> [f32; GRAPH_WIDTH as usize] {
+        let mut out = [0.0_f32; GRAPH_WIDTH as usize];
+
+        let (first, second) = self.readings.split_at(self.idx);
+
+        out[..second.len()].copy_from_slice(second);
+        out[second.len()..].copy_from_slice(first);
+
+        out.reverse();
+
+        out
     }
 }
