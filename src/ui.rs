@@ -71,12 +71,6 @@ const RAW_CONNECTING_WIFI: ImageRawLE<'static, Rgb565> =
 const RAW_CONNECTING_DHCP: ImageRawLE<'static, Rgb565> =
     ImageRawLE::new(include_bytes!("../ui/raw/connect-dhcp.bin"), DISPLAY_W);
 
-const RAW_CONNECTING_MQTT: ImageRawLE<'static, Rgb565> =
-    ImageRawLE::new(include_bytes!("../ui/raw/connect-mqtt.bin"), DISPLAY_W);
-
-const RAW_CONNECTING_SEN55: ImageRawLE<'static, Rgb565> =
-    ImageRawLE::new(include_bytes!("../ui/raw/connect-sen55.bin"), DISPLAY_W);
-
 const RAW_CONNECTING_READY: ImageRawLE<'static, Rgb565> =
     ImageRawLE::new(include_bytes!("../ui/raw/connect-ready.bin"), DISPLAY_W);
 
@@ -91,27 +85,14 @@ const RAW_BG_READINGS_DANGEROUS: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
     DISPLAY_W,
 );
 
-const RAW_BG_GRAPHS_1_OK: ImageRawLE<'static, Rgb565> =
-    ImageRawLE::new(include_bytes!("../ui/raw/graphs-1-default.bin"), DISPLAY_W);
+const RAW_BG_GRAPHS_OK: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/graphs-default.bin"), DISPLAY_W);
 
-const RAW_BG_GRAPHS_1_UNHAPPY: ImageRawLE<'static, Rgb565> =
-    ImageRawLE::new(include_bytes!("../ui/raw/graphs-1-unhappy.bin"), DISPLAY_W);
+const RAW_BG_GRAPHS_UNHAPPY: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/graphs-unhappy.bin"), DISPLAY_W);
 
-const RAW_BG_GRAPHS_1_DANGEROUS: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/graphs-1-dangerous.bin"),
-    DISPLAY_W,
-);
-
-const RAW_BG_GRAPHS_2_OK: ImageRawLE<'static, Rgb565> =
-    ImageRawLE::new(include_bytes!("../ui/raw/graphs-2-default.bin"), DISPLAY_W);
-
-const RAW_BG_GRAPHS_2_UNHAPPY: ImageRawLE<'static, Rgb565> =
-    ImageRawLE::new(include_bytes!("../ui/raw/graphs-2-unhappy.bin"), DISPLAY_W);
-
-const RAW_BG_GRAPHS_2_DANGEROUS: ImageRawLE<'static, Rgb565> = ImageRawLE::new(
-    include_bytes!("../ui/raw/graphs-2-dangerous.bin"),
-    DISPLAY_W,
-);
+const RAW_BG_GRAPHS_DANGEROUS: ImageRawLE<'static, Rgb565> =
+    ImageRawLE::new(include_bytes!("../ui/raw/graphs-dangerous.bin"), DISPLAY_W);
 
 pub struct UiController {
     display: Display,
@@ -126,12 +107,9 @@ pub struct UiController {
     history: HistoricReadings,
 }
 
-#[allow(unused)]
 pub enum ConnectionStage {
     Wifi,
     Dhcp,
-    Mqtt,
-    Sen55,
     Ready,
 }
 
@@ -163,15 +141,13 @@ impl UiController {
         let img = match connection_stage {
             ConnectionStage::Wifi => Image::new(&RAW_CONNECTING_WIFI, Point::zero()),
             ConnectionStage::Dhcp => Image::new(&RAW_CONNECTING_DHCP, Point::zero()),
-            ConnectionStage::Mqtt => Image::new(&RAW_CONNECTING_MQTT, Point::zero()),
-            ConnectionStage::Sen55 => Image::new(&RAW_CONNECTING_SEN55, Point::zero()),
             ConnectionStage::Ready => Image::new(&RAW_CONNECTING_READY, Point::zero()),
         };
 
         img.draw(&mut self.display).unwrap();
     }
 
-    pub fn render_readings(&mut self, readings: &Readings, first_of_cycle: bool) {
+    pub fn render_readings_page(&mut self, readings: &Readings, first_of_cycle: bool) {
         // Work out the health of the readings
         let new_health = readings.health();
         let bg = match new_health {
@@ -205,6 +181,9 @@ impl UiController {
             }
         }
 
+        // Debug: Ignore everything after this to figure out why it's never returning
+        return;
+
         // Draw the readings
         draw_reading(&mut self.display, bg, PM1_POS, &readings.pm1_0);
         draw_reading(&mut self.display, bg, TVOC_POS, &readings.voc_index);
@@ -219,13 +198,13 @@ impl UiController {
     }
 
     /// Render the first page of graphs
-    pub fn draw_graph_page_1(&mut self, readings: &Readings, first_of_cycle: bool) {
+    pub fn render_graphs_page(&mut self, readings: &Readings, first_of_cycle: bool) {
         // Work out the health of the readings
         let new_health = readings.health();
         let bg = match new_health {
-            Health::Ok => &RAW_BG_GRAPHS_1_OK,
-            Health::Warning => &RAW_BG_GRAPHS_1_UNHAPPY,
-            Health::Dangerous => &RAW_BG_GRAPHS_1_DANGEROUS,
+            Health::Ok => &RAW_BG_GRAPHS_OK,
+            Health::Warning => &RAW_BG_GRAPHS_UNHAPPY,
+            Health::Dangerous => &RAW_BG_GRAPHS_DANGEROUS,
         };
 
         let mut this_frame_raw = [0; 240 * 280 * 2];
@@ -256,52 +235,8 @@ impl UiController {
         // Draw the graphs
         draw_graph(&mut self.display, bg, GRAPH_1_POS, &self.history.pm1_0);
         draw_graph(&mut self.display, bg, GRAPH_2_POS, &self.history.pm2_5);
-        draw_graph(&mut self.display, bg, GRAPH_3_POS, &self.history.pm4_0);
-        draw_graph(&mut self.display, bg, GRAPH_4_POS, &self.history.pm10_0);
-
-        self.last_health = Some(new_health);
-    }
-
-    /// Render the first page of graphs
-    pub fn draw_graph_page_2(&mut self, readings: &Readings, first_of_cycle: bool) {
-        // Work out the health of the readings
-        let new_health = readings.health();
-        let bg = match new_health {
-            Health::Ok => &RAW_BG_GRAPHS_2_OK,
-            Health::Warning => &RAW_BG_GRAPHS_2_UNHAPPY,
-            Health::Dangerous => &RAW_BG_GRAPHS_2_DANGEROUS,
-        };
-
-        let mut this_frame_raw = [0; 240 * 280 * 2];
-        let mut this_frame_buffer = FrameBuffer::new(&mut this_frame_raw, DISPLAY_W, DISPLAY_H);
-
-        // Draw the background straight into the temporary framebuffer (so it's behind the readings we're about to redraw)
-        let img = Image::new(bg, Point::zero());
-        bg.draw(&mut this_frame_buffer).unwrap();
-
-        match (&self.last_health, first_of_cycle) {
-            (_, true) => {
-                // First time rendering this page, draw background directly to display
-                img.draw(&mut self.display).unwrap();
-            }
-            (None, _) => {
-                // First reading outright, draw background directly to display
-                img.draw(&mut self.display).unwrap();
-            }
-            (Some(last_health), _) if discriminant(&new_health) != discriminant(last_health) => {
-                // Health hasn changed, draw background directly to display
-                img.draw(&mut self.display).unwrap();
-            }
-            _ => {
-                // No change in health, nothing to be done
-            }
-        }
-
-        // Draw the graphs
-        draw_graph(&mut self.display, bg, GRAPH_1_POS, &self.history.voc);
-        draw_graph(&mut self.display, bg, GRAPH_2_POS, &self.history.nox);
-        draw_graph(&mut self.display, bg, GRAPH_3_POS, &self.history.temp);
-        draw_graph(&mut self.display, bg, GRAPH_4_POS, &self.history.humidity);
+        draw_graph(&mut self.display, bg, GRAPH_3_POS, &self.history.voc);
+        draw_graph(&mut self.display, bg, GRAPH_4_POS, &self.history.nox);
 
         self.last_health = Some(new_health);
     }
@@ -408,14 +343,6 @@ pub async fn worker(mut ui: UiController) {
     loop {
         let readings = UI_READING_CHANNEL.receive().await;
 
-        // Readings come in once per second.
-        // We have three screens to show, for 15 seconds each.
-        // In addition, we only render every 3 readings to reduce flicker.
-        //
-        // This puts us on a 45 second cycle, with 15 seconds per screen,
-        // which is 5 readings at 3 readings per screen.
-        reading_idx = (reading_idx + 1) % 45;
-
         // Push the readings to the history
         ui.history.pm1_0.push(readings.pm1_0);
         ui.history.pm2_5.push(readings.pm2_5);
@@ -426,19 +353,26 @@ pub async fn worker(mut ui: UiController) {
         ui.history.temp.push(readings.temperature);
         ui.history.humidity.push(readings.humidity);
 
-        // We only render every 5 readings, to reduce flicker.
-        if reading_idx % 3 == 0 {
-            continue;
+        info!("Reading idx is {}", reading_idx);
+
+        // Render the right page (at the right rate)
+        match reading_idx {
+            x @ 0..=25 if x % 5 == 0 => {
+                info!("In range 0..=25 and %5");
+                //ui.render_readings_page(&readings, reading_idx == 0);
+            }
+            x @ 26..=50 if x % 3 == 0 => {
+                info!("In range 26..=50 and %3");
+                ui.render_graphs_page(&readings, reading_idx == 27);
+            }
+            _ => {
+                info!("No render");
+            }
         }
 
-        // For the first 15 seconds, show the readings
-        ui.render_readings(&readings, reading_idx == 0);
-
-        // For the next 15 seconds, show the graphs (page 1)
-        ui.draw_graph_page_1(&readings, reading_idx == 15);
-
-        // For the next 15 seconds, show the graphs (page 2)
-        ui.draw_graph_page_2(&readings, reading_idx == 30);
+        // Readings come in once per second, but we don't show every one to reduce flicker
+        // We also alternate between pages, 20s each.
+        reading_idx = (reading_idx + 1) % 50;
     }
 }
 
